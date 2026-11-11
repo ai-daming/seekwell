@@ -1,4 +1,4 @@
-# SeekSpring（寻源池）整体设计
+# SeekWell整体设计
 
 - 状态：方案初稿，供讨论与设计确认；不表示实现已经完成。
 - 日期：2026-11-12
@@ -6,11 +6,11 @@
 
 ## 1. 目标
 
-SeekSpring 为使用 DeepSeek 的人提供一个统一入口：用户加入自己有权使用的官方 API、第三方 API、套餐、产品账号或现有代理，选择需要的 DeepSeek 模型，由系统根据具体能力、账号状态与用户策略选择可用来源；搜索和网页抓取也可统一管理。
+SeekWell 为使用 DeepSeek 的人提供一个统一入口：用户加入自己有权使用的官方 API、第三方 API、套餐、产品账号或现有代理，选择需要的 DeepSeek 模型，由系统根据具体能力、账号状态与用户策略选择可用来源；搜索和网页抓取也可统一管理。
 
 目标覆盖所有可接入的 DeepSeek 来源，并持续扩充渠道目录。发现一个渠道、获得其使用资格、将其接入以及验证其可用是不同的事情；系统不承诺自动拥有所有来源的额度，也不能因为产品界面上出现了 DeepSeek 就认定它可用于外部 API。
 
-典型场景：用户拥有 WorkBuddy、OpenDesign 和 DeepSeek 官方 API。客户端选择 DeepSeek Flash，SeekSpring 选择满足模型版本、上下文、工具调用等条件的候选渠道。首选来源在输出前限流时，尝试其他合格来源；官方付费 API 是否参与自动兜底由用户明确设置。模型可以使用第三方来源，搜索则可以独立使用 DeepSeek 官方 Search / Fetch。
+典型场景：用户拥有 WorkBuddy、OpenDesign 和 DeepSeek 官方 API。客户端选择 DeepSeek Flash，SeekWell 选择满足模型版本、上下文、工具调用等条件的候选渠道。首选来源在输出前限流时，尝试其他合格来源；官方付费 API 是否参与自动兜底由用户明确设置。模型可以使用第三方来源，搜索则可以独立使用 DeepSeek 官方 Search / Fetch。
 
 ### 产品原则
 
@@ -26,7 +26,7 @@ SeekSpring 为使用 DeepSeek 的人提供一个统一入口：用户加入自�
 ```mermaid
 flowchart TB
     Client[DSH / 其他客户端] --> Gateway[统一 API 入口]
-    UI[管理界面] --> Core[SeekSpring 核心]
+    UI[管理界面] --> Core[SeekWell 核心]
     Gateway --> Core
     Core --> Catalog[DeepSeek 模型和能力目录]
     Core --> Router[渠道与账号调度]
@@ -88,7 +88,7 @@ flowchart TB
 
 [DeepSeek Search / Fetch](https://api-docs.deepseek.com/guides/search/) 是独立的搜索与网页抓取 API；某些渠道的模型内置联网搜索则是另一种能力。第一版优先验证官方 Search 和 Fetch，并清楚显示搜索来源与费用。其他来源可扩展，但不把第三方搜索标成 DeepSeek 官方搜索。
 
-模型来源与搜索来源可以不同。各客户端是否会调用寻源池暴露的搜索接口，需要按其真实入口分别验证；仅实现聊天接口并不自动接通搜索。官方搜索已按其现行价格规则收费，具体金额以官方文档和账号为准。
+模型来源与搜索来源可以不同。各客户端是否会调用SeekWell暴露的搜索接口，需要按其真实入口分别验证；仅实现聊天接口并不自动接通搜索。官方搜索已按其现行价格规则收费，具体金额以官方文档和账号为准。
 
 ### 对外接口
 
