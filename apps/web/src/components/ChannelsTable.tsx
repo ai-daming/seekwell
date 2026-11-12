@@ -7,8 +7,10 @@ type ChannelsTableProps = {
   channels: Channel[];
   compact?: boolean;
   discovering: number | null;
+  speeding: number | null;
   onAdd: () => void;
   onDiscover: (channel: Channel) => void;
+  onSpeedTest: (channel: Channel) => void;
   onEdit: (channel: Channel) => void;
   onToggle: (channel: Channel) => void;
   onRemove: (channel: Channel) => void;
@@ -18,8 +20,10 @@ export function ChannelsTable({
   channels,
   compact = false,
   discovering,
+  speeding,
   onAdd,
   onDiscover,
+  onSpeedTest,
   onEdit,
   onToggle,
   onRemove,
@@ -109,6 +113,15 @@ export function ChannelsTable({
                   >
                     <Icon name="catalog" />
                     {discovering === channel.id ? '查询中' : '查询模型'}
+                  </button>
+                  <button
+                    type="button"
+                    className="button button--ghost"
+                    disabled={speeding === channel.id}
+                    onClick={() => onSpeedTest(channel)}
+                  >
+                    <Icon name="speed" />
+                    {speeding === channel.id ? '测速中…' : '测速'}
                   </button>
                   <button
                     type="button"

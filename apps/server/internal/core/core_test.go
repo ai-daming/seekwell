@@ -2,13 +2,16 @@ package core
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func newTestServer(t *testing.T) (*Server, *httptest.Server) {
@@ -22,6 +25,57 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 	t.Cleanup(h.Close)
 	return s, h
 }
+
+func saveTestChannel(t *testing.T, s *Server, c Channel) Channel {
+	t.Helper()
+	if err := s.SaveChannel(&c); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func runSpeedTest(t *testing.T, h *httptest.Server, id int64) (*http.Response, []byte) {
+	t.Helper()
+	resp, err := http.Post(h.URL+"/api/channels/"+strconv.FormatInt(id, 10)+"/speedtest", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp, b
+}
+
+type speedResponse struct {
+	DurationMS int    `json:"duration_ms"`
+	Status     int    `json:"status"`
+	Model      string `json:"model"`
+}
+
+func decodeSpeedResponse(t *testing.T, b []byte) speedResponse {
+	t.Helper()
+	var out speedResponse
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("invalid speed response %q: %v", b, err)
+	}
+	return out
+}
+
+func errorMessage(t *testing.T, b []byte) string {
+	t.Helper()
+	var out struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("invalid error response %q: %v", b, err)
+	}
+	return out.Error.Message
+}
+
 func TestChannelPersistenceAndSecret(t *testing.T) {
 	s, h := newTestServer(t)
 	c := Channel{Name: "one", BaseURL: "http://localhost:1000", APIKey: "secret", Model: "deepseek-flash", RemoteModel: "deepseek-flash", Enabled: true}
@@ -364,5 +418,188 @@ func TestDiscoverDeepSeekModelsWithoutLeakingCredentials(t *testing.T) {
 	b, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 || !bytes.Contains(b, []byte("deepseek-v4-pro")) || bytes.Contains(b, []byte("gpt-test")) || bytes.Contains(b, []byte("secret")) {
 		t.Fatalf("%d %s", resp.StatusCode, b)
+	}
+}
+
+func TestSpeedTestReturnsDurationAndStatus(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		io.WriteString(w, `{}`)
+	}))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	c := saveTestChannel(t, s, Channel{Name: "test", BaseURL: upstream.URL + "/v1", APIKey: "secret", Model: "deepseek-flash", RemoteModel: "upstream-deepseek", Enabled: true})
+	resp, b := runSpeedTest(t, h, c.ID)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d: %s", resp.StatusCode, b)
+	}
+	got := decodeSpeedResponse(t, b)
+	if got.DurationMS < 0 || got.Status != 200 || got.Model != c.RemoteModel {
+		t.Fatalf("unexpected speed result: %+v", got)
+	}
+}
+
+func TestSpeedTestSendsRealCompletionRequest(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer secret" {
+			t.Errorf("unexpected authorization %q", r.Header.Get("Authorization"))
+		}
+		var payload struct {
+			Model     string `json:"model"`
+			MaxTokens int    `json:"max_tokens"`
+			Stream    bool   `json:"stream"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("invalid request body: %v", err)
+		}
+		if payload.Model != "upstream-deepseek" || payload.MaxTokens != 1 || payload.Stream {
+			t.Errorf("unexpected payload: %+v", payload)
+		}
+		io.WriteString(w, `{}`)
+	}))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	c := saveTestChannel(t, s, Channel{Name: "test", BaseURL: upstream.URL + "/v1", APIKey: "secret", Model: "deepseek-flash", RemoteModel: "upstream-deepseek", Enabled: true})
+	resp, b := runSpeedTest(t, h, c.ID)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d: %s", resp.StatusCode, b)
+	}
+}
+
+func TestSpeedTestReportsUpstreamFailureAsResult(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		io.WriteString(w, `{"error":{"message":"down"}}`)
+	}))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	c := saveTestChannel(t, s, Channel{Name: "test", BaseURL: upstream.URL + "/v1", APIKey: "secret", Model: "deepseek-flash", RemoteModel: "upstream-deepseek", Enabled: true})
+	resp, b := runSpeedTest(t, h, c.ID)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d: %s", resp.StatusCode, b)
+	}
+	got := decodeSpeedResponse(t, b)
+	if got.Status != http.StatusServiceUnavailable || got.DurationMS < 0 {
+		t.Fatalf("unexpected speed result: %+v", got)
+	}
+}
+
+func TestSpeedTestTimesOutSeparately(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(500 * time.Millisecond)
+		io.WriteString(w, `{}`)
+	}))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	s.speedTimeout = 50 * time.Millisecond
+	c := saveTestChannel(t, s, Channel{Name: "test", BaseURL: upstream.URL + "/v1", APIKey: "secret", Model: "deepseek-flash", RemoteModel: "upstream-deepseek", Enabled: true})
+	resp, b := runSpeedTest(t, h, c.ID)
+	if resp.StatusCode != 502 {
+		t.Fatalf("status %d: %s", resp.StatusCode, b)
+	}
+	message := errorMessage(t, b)
+	if !strings.Contains(message, "超时") || !strings.Contains(message, "已耗时") {
+		t.Fatalf("unexpected timeout message %q", message)
+	}
+}
+
+func TestSpeedTestOpenCodeGoHeaders(t *testing.T) {
+	sessions := []string{}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sessions = append(sessions, r.Header.Get("x-opencode-session"))
+		if r.Header.Get("User-Agent") != "SeekWell/0.1" {
+			t.Errorf("unexpected user agent %q", r.Header.Get("User-Agent"))
+		}
+		io.WriteString(w, `{}`)
+	}))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	c := saveTestChannel(t, s, Channel{Name: "test", BaseURL: upstream.URL + "/v1", APIKey: "secret", Model: "deepseek-flash", RemoteModel: "deepseek-v4.1-flash", Enabled: true, Kind: "opencode_go"})
+	for i := 0; i < 2; i++ {
+		resp, b := runSpeedTest(t, h, c.ID)
+		if resp.StatusCode != 200 {
+			t.Fatalf("status %d: %s", resp.StatusCode, b)
+		}
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(sessions))
+	}
+	for _, session := range sessions {
+		decoded, err := hex.DecodeString(session)
+		if err != nil || len(decoded) != 16 {
+			t.Fatalf("invalid session header %q", session)
+		}
+	}
+	if sessions[0] == sessions[1] {
+		t.Fatal("speed test reused the same opencode session")
+	}
+}
+
+func TestSpeedTestIgnoresRoutingGates(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{}`)
+	}))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	c := saveTestChannel(t, s, Channel{Name: "paid-disabled", BaseURL: upstream.URL + "/v1", APIKey: "secret", Model: "deepseek-flash", RemoteModel: "upstream-deepseek", Enabled: false, Paid: true, AutoPaid: false})
+	resp, b := runSpeedTest(t, h, c.ID)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d: %s", resp.StatusCode, b)
+	}
+	if got := decodeSpeedResponse(t, b); got.Status != 200 {
+		t.Fatalf("unexpected speed result: %+v", got)
+	}
+}
+
+func TestSpeedTestDoesNotWriteRequestHistory(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{}`)
+	}))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	c := saveTestChannel(t, s, Channel{Name: "test", BaseURL: upstream.URL + "/v1", APIKey: "secret", Model: "deepseek-flash", RemoteModel: "upstream-deepseek", Enabled: true})
+	if resp, b := runSpeedTest(t, h, c.ID); resp.StatusCode != 200 {
+		t.Fatalf("status %d: %s", resp.StatusCode, b)
+	}
+	resp, err := http.Get(h.URL + "/api/requests")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if strings.TrimSpace(string(b)) != "[]" {
+		t.Fatalf("speed test wrote request history: %s", b)
+	}
+}
+
+func TestSpeedTestMissingChannel(t *testing.T) {
+	_, h := newTestServer(t)
+	resp, b := runSpeedTest(t, h, 999)
+	if resp.StatusCode != 404 {
+		t.Fatalf("status %d: %s", resp.StatusCode, b)
+	}
+	if message := errorMessage(t, b); message != "渠道不存在" {
+		t.Fatalf("unexpected message %q", message)
+	}
+}
+
+func TestSpeedTestConnectionFailure(t *testing.T) {
+	closed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	closedURL := closed.URL
+	closed.Close()
+	s, h := newTestServer(t)
+	c := saveTestChannel(t, s, Channel{Name: "test", BaseURL: closedURL + "/v1", APIKey: "secret", Model: "deepseek-flash", RemoteModel: "upstream-deepseek", Enabled: true})
+	resp, b := runSpeedTest(t, h, c.ID)
+	if resp.StatusCode != 502 {
+		t.Fatalf("status %d: %s", resp.StatusCode, b)
+	}
+	message := errorMessage(t, b)
+	if !strings.Contains(message, "连接") || !strings.Contains(message, "已耗时") {
+		t.Fatalf("unexpected connection message %q", message)
 	}
 }

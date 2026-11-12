@@ -2,11 +2,13 @@ package core
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -40,10 +42,11 @@ type Channel struct {
 	MessagesBaseURL   string `json:"messages_base_url"`
 }
 type Server struct {
-	db       *sql.DB
-	client   *http.Client
-	mu       sync.Mutex
-	sessions map[string]sessionBinding
+	db           *sql.DB
+	client       *http.Client
+	speedTimeout time.Duration
+	mu           sync.Mutex
+	sessions     map[string]sessionBinding
 }
 type sessionBinding struct {
 	channel int64
@@ -79,7 +82,7 @@ func New(path string) (*Server, error) {
 		}
 	}
 	_ = os.Chmod(path, 0600)
-	return &Server{db: db, client: &http.Client{Timeout: 5 * time.Minute}, sessions: make(map[string]sessionBinding)}, nil
+	return &Server{db: db, client: &http.Client{Timeout: 5 * time.Minute}, speedTimeout: 30 * time.Second, sessions: make(map[string]sessionBinding)}, nil
 }
 func (s *Server) Close() error { return s.db.Close() }
 func validModel(v string) bool {
@@ -217,6 +220,7 @@ func (s *Server) Handler(webDir string) http.Handler {
 	})
 	m.HandleFunc("GET /api/requests", s.history)
 	m.HandleFunc("POST /api/channels/{id}/discover", s.discover)
+	m.HandleFunc("POST /api/channels/{id}/speedtest", s.speedtest)
 	m.HandleFunc("GET /v1/models", func(w http.ResponseWriter, r *http.Request) {
 		cs, e := s.channels()
 		if e != nil {
@@ -297,6 +301,70 @@ func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fail(w, 404, "渠道不存在")
+}
+func (s *Server) speedtest(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		fail(w, 400, "无效 ID")
+		return
+	}
+	channels, err := s.channels()
+	if err != nil {
+		fail(w, 500, "读取渠道失败")
+		return
+	}
+	for _, c := range channels {
+		if c.ID != id {
+			continue
+		}
+		payload, _ := json.Marshal(map[string]any{
+			"model":      c.RemoteModel,
+			"messages":   []map[string]string{{"role": "user", "content": "ping"}},
+			"max_tokens": 1,
+			"stream":     false,
+		})
+		ctx, cancel := context.WithTimeout(r.Context(), s.speedTimeout)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/chat/completions", bytes.NewReader(payload))
+		if err != nil {
+			fail(w, 400, "无效渠道地址")
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+		if c.Kind == "opencode_go" {
+			var session [16]byte
+			if _, err := rand.Read(session[:]); err != nil {
+				fail(w, 500, "无法生成会话标识")
+				return
+			}
+			req.Header.Set("x-opencode-session", hex.EncodeToString(session[:]))
+			req.Header.Set("User-Agent", "SeekWell/0.1")
+		}
+		start := time.Now()
+		resp, err := s.client.Do(req)
+		if err != nil {
+			s.failSpeedtest(w, ctx, start)
+			return
+		}
+		_, readErr := io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<20))
+		resp.Body.Close()
+		if readErr != nil {
+			s.failSpeedtest(w, ctx, start)
+			return
+		}
+		jsonOut(w, 200, map[string]any{"duration_ms": time.Since(start).Milliseconds(), "status": resp.StatusCode, "model": c.RemoteModel})
+		return
+	}
+	fail(w, 404, "渠道不存在")
+}
+func (s *Server) failSpeedtest(w http.ResponseWriter, ctx context.Context, start time.Time) {
+	elapsed := time.Since(start).Milliseconds()
+	if ctx.Err() == context.DeadlineExceeded {
+		fail(w, 502, fmt.Sprintf("测速超时（>%dms，已耗时 %dms）", s.speedTimeout.Milliseconds(), elapsed))
+		return
+	}
+	fail(w, 502, fmt.Sprintf("无法连接渠道（已耗时 %dms）", elapsed))
 }
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 	rows, e := s.db.Query(`SELECT created_at,model,channel,status,duration_ms FROM requests ORDER BY id DESC LIMIT 100`)

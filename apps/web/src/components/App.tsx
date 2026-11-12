@@ -5,7 +5,7 @@ import '../base.css';
 import './App.css';
 import { api, request } from '../api';
 import { copy } from '../copy';
-import { freshDraft, type Channel, type Draft, type Entry, type Tab } from '../types';
+import { freshDraft, type Channel, type Draft, type Entry, type SpeedTestResult, type Tab } from '../types';
 import { ActivityTable } from './ActivityTable';
 import { ChannelDialog } from './ChannelDialog';
 import { ChannelsTable } from './ChannelsTable';
@@ -14,6 +14,7 @@ import { ModelsDialog } from './ModelsDialog';
 import { Overview } from './Overview';
 import { SearchPanel } from './SearchPanel';
 import { Shell } from './Shell';
+import { SpeedDialog } from './SpeedDialog';
 
 export default function App() {
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -30,6 +31,8 @@ export default function App() {
   const [searchResult, setSearchResult] = useState('');
   const [discovered, setDiscovered] = useState<{ name: string; models: string[] } | null>(null);
   const [discovering, setDiscovering] = useState<number | null>(null);
+  const [speedResult, setSpeedResult] = useState<{ name: string; result: SpeedTestResult } | null>(null);
+  const [speeding, setSpeeding] = useState<number | null>(null);
 
   async function refresh(silent = false) {
     if (!silent) setLoading(true);
@@ -127,6 +130,20 @@ export default function App() {
     }
   }
 
+  async function speedTest(channel: Channel) {
+    if (channel.paid && !window.confirm(`${copy.speedTestConfirm}「${channel.name}」`)) return;
+    setSpeeding(channel.id);
+    setError('');
+    try {
+      const result = await api.speedTest(channel.id);
+      setSpeedResult({ name: channel.name, result });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '测速失败');
+    } finally {
+      setSpeeding(null);
+    }
+  }
+
   async function remove(channel: Channel) {
     if (!window.confirm(`${copy.deleteConfirm}「${channel.name}」？`)) return;
     try {
@@ -185,9 +202,11 @@ export default function App() {
             modelCount={models.length}
             loading={loading}
             discovering={discovering}
+            speeding={speeding}
             onAdd={add}
             onManage={() => setTab('channels')}
             onDiscover={(channel) => void discover(channel)}
+            onSpeedTest={(channel) => void speedTest(channel)}
             onEdit={edit}
             onToggle={(channel) => void toggle(channel)}
             onRemove={(channel) => void remove(channel)}
@@ -217,8 +236,10 @@ export default function App() {
                 <ChannelsTable
                   channels={channels}
                   discovering={discovering}
+                  speeding={speeding}
                   onAdd={add}
                   onDiscover={(channel) => void discover(channel)}
+                  onSpeedTest={(channel) => void speedTest(channel)}
                   onEdit={edit}
                   onToggle={(channel) => void toggle(channel)}
                   onRemove={(channel) => void remove(channel)}
@@ -272,6 +293,8 @@ export default function App() {
       </Shell>
 
       <ModelsDialog discovered={discovered} onClose={() => setDiscovered(null)} />
+
+      <SpeedDialog measured={speedResult} onClose={() => setSpeedResult(null)} />
 
       <ChannelDialog
         open={modal}

@@ -76,7 +76,7 @@ test('T2 图标位使用 Emoji 12.1 内的彩色 emoji', () => {
   }
 });
 
-test('T3 外部接口集合恰好为五条', () => {
+test('T3 外部接口集合恰好为六条', () => {
   const paths = new Set();
   for (const match of allSource.matchAll(/['"`](\/(?:api|v1)\/[^'"`]*)['"`]/g)) {
     paths.add(match[1].replace(/\$\{[^}]+\}/g, '${id}'));
@@ -85,6 +85,7 @@ test('T3 外部接口集合恰好为五条', () => {
     '/api/channels',
     '/api/channels/${id}',
     '/api/channels/${id}/discover',
+    '/api/channels/${id}/speedtest',
     '/api/requests',
     '/v1/tools/search',
   ].sort());
@@ -106,6 +107,8 @@ test('T4 copy 不变量非空且被组件引用', () => {
     'statusZero',
     'searchCount',
     'emptyChannels',
+    'speedTestConfirm',
+    'speedTestNotice',
   ];
   for (const name of required) {
     const match = copySource.match(new RegExp(`\\b${name}\\s*:\\s*(['"\`])([^'"\`]+)\\1`));
@@ -217,4 +220,14 @@ test('T15 干净检出直接 make test 可跑前端', () => {
     /test:\s*\n\tcd apps\/server && go test \.\/internal\/core\n\t\$\(MAKE\) web-test/,
     'test 目标未复用带依赖安装的 web-test',
   );
+});
+
+test('T16 测速入口、付费确认与结果展示', () => {
+  assert.match(apiSource, /speedTest:\s*\(id:\s*number\)[\s\S]*?\/speedtest/, '缺少测速 API 客户端');
+  assert.match(componentSource, /channel\.paid\s*&&\s*!window\.confirm\(/, '付费渠道测速前缺少费用确认');
+  assert.match(componentSource, /copy\.speedTestConfirm/, '测速确认未引用 copy');
+  assert.match(componentSource, /speeding\s*===\s*channel\.id/, '测速按钮缺少进行中态');
+  assert.match(componentSource, /测速中/, '测速按钮未显示进行中文案');
+  assert.match(componentSource, /duration_ms/, '测速结果未展示耗时');
+  assert.match(componentSource, /result\.status/, '测速结果未展示上游状态码');
 });
