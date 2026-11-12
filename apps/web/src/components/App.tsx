@@ -31,8 +31,8 @@ export default function App() {
   const [discovered, setDiscovered] = useState<{ name: string; models: string[] } | null>(null);
   const [discovering, setDiscovering] = useState<number | null>(null);
 
-  async function refresh() {
-    setLoading(true);
+  async function refresh(silent = false) {
+    if (!silent) setLoading(true);
     try {
       const [nextChannels, nextEntries] = await Promise.all([api.channels(), api.requests()]);
       setChannels(nextChannels);
@@ -41,7 +41,7 @@ export default function App() {
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '连接失败');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }
 
@@ -106,7 +106,7 @@ export default function App() {
         await api.createChannel(payload);
       }
       setModal(false);
-      await refresh();
+      await refresh(true);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '保存失败');
     } finally {
@@ -131,7 +131,7 @@ export default function App() {
     if (!window.confirm(`${copy.deleteConfirm}「${channel.name}」？`)) return;
     try {
       await api.deleteChannel(channel.id);
-      await refresh();
+      await refresh(true);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '删除失败');
     }
@@ -144,7 +144,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...channel, api_key: '', enabled: !channel.enabled }),
       });
-      await refresh();
+      await refresh(true);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '更新失败');
     }

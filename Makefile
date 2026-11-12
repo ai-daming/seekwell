@@ -5,8 +5,8 @@ server:
 	cd apps/server && go build ./cmd/seekwell
 test:
 	cd apps/server && go test ./internal/core
-	cd apps/web && npm run test
+	$(MAKE) web-test
 web-test:
-	cd apps/web && npm run test
+	cd apps/web && npm ci && npm run test
 run:
 	cd apps/server && go run ./cmd/seekwell
