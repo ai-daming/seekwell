@@ -1,12 +1,16 @@
 # DimAgent 渠道
 
-SeekWell 可以通过用户自建的 DimAgent API Key，把 dimagent.cn 当作一个上游来源，使用该账号的 Credits 调用其提供的 DeepSeek 模型。渠道类型选择 `DimAgent`，API 根地址默认为 `https://dimagent.cn/v1`。
+SeekWell 可以通过本机 CLI 授权或用户自建的 API token，把 dimagent.cn 当作一个上游来源，使用该账号的 Credits 调用其提供的 DeepSeek 模型。渠道类型选择 `DimAgent`，API 根地址默认为 `https://dimagent.cn/v1`。
 
-> **未用真实令牌验证。** 本文的地址、模型 ID 与能力说明来自公开文档和匿名探测；SeekWell 侧只用模拟上游做了自动化测试。真实账号下的模型目录、流式、工具调用与协议可用性，请按下方清单自行确认。
+> **已做真实账号验证，自动刷新仍待自然过期验收。** 2026-11-13 使用 CLI 0.5.27 和 Nano 套餐验证模型目录、非流式、流式以及工具调用续答。结果与账号、套餐和上游策略有关。
 
 ## 令牌获取
 
-在 dimagent.cn 的账户中心进入 **我的令牌 / My API Keys**，新建一个长期 API Key（通常以 `sk-` 开头）。SeekWell 使用这个 Key 作为 `Authorization: Bearer` 凭据，不需要 DimAgent 官方 CLI 的 OAuth 登录。
+推荐使用 **本机 CLI 授权**：安装官方 `dimcode` CLI，使用 `dim auth login` 完成浏览器或设备授权，在渠道的凭据方式中选择「使用本机 DimAgent 授权」。SeekWell 读取 CLI 的 `$DIMCODE_HOME/auth.json`（默认 `~/.dimcode/v2/auth.json`），令牌临近过期时调用 `dim auth refresh`，不直接写授权文件。SeekWell 须与 CLI 使用相同系统账号、`DIMCODE_HOME`，且服务进程的 PATH 必须能找到 `dim`。
+
+若账号的控制台设置中提供 API tokens，也可创建 token，选择「填 API Key」使用。不同套餐的权限可能不同，请以实际控制台为准。
+
+CLI OAuth 凭据受官方客户端限制：该模式按 CLI 0.5.27 的公开请求格式发送客户端标识，模型目录请求带 `?type=dim`。上游政策或客户端协议变化可能导致接入失效。
 
 ## 基础配置
 
@@ -47,19 +51,15 @@ DimAgent 使用预付 Credits，余额只在 dimagent.cn 账户中心查看。�
 
 DimAgent 没有与 DeepSeek 官方一致的 `/v1/tools/search`、`/v1/tools/fetch` 接口。SeekWell 的 Search / Fetch 仍然只使用渠道类型为「DeepSeek 官方」的渠道；把 DimAgent 配成该类型不会让搜索走它。
 
-非目标：不通过 DimAgent 接收 GLM、Step、MiMo、Gemini 等非 DeepSeek 模型，不做 DimAgent 账号登录或 Credits 余额查询，不做跨协议转换。
+非目标：不通过 DimAgent 接收 GLM、Step、MiMo、Gemini 等非 DeepSeek 模型，不在 SeekWell 内发起 DimAgent 账号登录或查询 Credits 余额，不做跨协议转换。
 
 ## 验证记录
 
-**未用真实令牌验证。** 自动化测试只覆盖渠道类型读写、路由门禁、模型改写、模型目录过滤与 Search 隔离，使用本地模拟上游；不代表真实 DimAgent 上游可用。
+2026-11-13 使用真实 DimAgent 账号、CLI 0.5.27 和隔离的 SeekWell 实例验证：
 
-有令牌后建议依次确认：
-
-1. 点击「查询模型」，记录返回的 DeepSeek 模型 ID，确认是否需要 `deepseek/` 前缀，必要时修正本文示例与渠道映射。
-2. 用非流式 Chat Completions 请求 `deepseek-flash`，确认 HTTP 200 且返回内容非空。
-3. 用流式请求确认收到 SSE 数据与 `[DONE]`。
-4. 发起一轮带工具调用的请求并回传工具结果，确认模型能使用结果继续回答；通过后保留「工具调用」勾选。
-5. 按需试 Responses、Messages 与视觉模型；只有实测通过的项才勾选对应能力。
-6. 如果希望该渠道参与自动路由，再勾选「允许自动使用此付费渠道」。
-
-把实测结论补进本段后，再关闭对应 issue；在此之前，请把本文和界面上的能力提示都视为未确认状态。
+- `dim auth login --device-login` 登录成功；SeekWell 正确识别本机授权，列表不回显令牌。
+- 模型目录返回 `deepseek-v4.1-flash`；CLI OAuth 模式需要 `?type=dim` 和官方客户端请求标识。
+- Chat Completions 非流式返回 200 且内容非空；流式返回 SSE 和 `[DONE]`。
+- 一轮工具调用和回传工具结果后的续答均返回 200（测试工具结果为模拟数据）。
+- `dim auth refresh` 命令返回成功，随后 `dim auth status` 仍显示已登录；当前令牌仍新鲜，CLI 不会实际换取新令牌。SeekWell 的自动刷新及并发控制已用模拟测试覆盖；真实令牌尚未自然到达刷新窗口，真实换取与刷新后请求仍待验收。
+- Responses、Messages 和视觉能力尚未用真实上游验证。只有实测通过的能力才应勾选；付费渠道仍需明确允许才会参与自动路由。

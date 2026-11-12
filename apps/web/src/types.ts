@@ -4,6 +4,9 @@ export type Channel = {
   base_url: string;
   api_key?: string;
   has_key: boolean;
+  auth_mode: 'api_key' | 'cli_oauth';
+  auth_state?: string;
+  auth_message?: string;
   model: string;
   remote_model: string;
   enabled: boolean;
@@ -59,6 +62,7 @@ export const freshDraft = (): Draft => ({
   name: '',
   base_url: 'https://api.deepseek.com/v1',
   api_key: '',
+  auth_mode: 'api_key',
   model: 'deepseek-flash',
   remote_model: 'deepseek-flash',
   enabled: true,

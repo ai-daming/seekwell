@@ -22,6 +22,9 @@ export const icons = {
 } as const;
 
 export const copy = {
+  authModeLabel: '凭据方式',
+  authModeCli: '使用本机 DimAgent 授权',
+  dimAuthHint: '先在运行 SeekWell 的同一系统账号执行 dim auth login；授权过期时会调用 dim auth refresh，请确保服务的 PATH 能找到 dim。',
   unverifiedAvailability: '可用性未验证',
   enableIsNotAvailable: '启用不代表上游可用。实际状态以请求结果为准。',
   channelNotice: '渠道配置由你维护，额度和上游可用性目前不会自动查询。付费渠道需明确允许才会自动调用。',

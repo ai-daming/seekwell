@@ -27,6 +27,9 @@ type Channel struct {
 	Name              string `json:"name"`
 	BaseURL           string `json:"base_url"`
 	APIKey            string `json:"api_key,omitempty"`
+	AuthMode          string `json:"auth_mode"`
+	AuthState         string `json:"auth_state,omitempty"`
+	AuthMessage       string `json:"auth_message,omitempty"`
 	HasKey            bool   `json:"has_key"`
 	Model             string `json:"model"`
 	RemoteModel       string `json:"remote_model"`
@@ -68,11 +71,13 @@ func New(path string) (*Server, error) {
 		db.Close()
 		return nil, err
 	}
-	for _, column := range []string{"supports_tools", "supports_images", "supports_responses", "supports_messages", "messages_base_url"} {
+	for _, column := range []string{"supports_tools", "supports_images", "supports_responses", "supports_messages", "messages_base_url", "auth_mode"} {
 		var count int
 		if err = db.QueryRow(`SELECT count(*) FROM pragma_table_info('channels') WHERE name=?`, column).Scan(&count); err == nil && count == 0 {
 			definition := ` INTEGER NOT NULL DEFAULT 0`
-			if column == "messages_base_url" {
+			if column == "auth_mode" {
+				definition = ` TEXT NOT NULL DEFAULT 'api_key'`
+			} else if column == "messages_base_url" {
 				definition = ` TEXT NOT NULL DEFAULT ''`
 			}
 			_, err = db.Exec(`ALTER TABLE channels ADD COLUMN ` + column + definition)
@@ -120,6 +125,18 @@ func (s *Server) SaveChannel(c *Channel) error {
 	if c.Kind != "compatible" && c.Kind != "deepseek" && c.Kind != "opencode_go" && c.Kind != "dimagent" {
 		return errors.New("不支持的渠道类型")
 	}
+	if c.AuthMode == "" {
+		c.AuthMode = "api_key"
+	}
+	if c.AuthMode != "api_key" && c.AuthMode != "cli_oauth" {
+		return errors.New("不支持的凭据方式")
+	}
+	if c.AuthMode == "cli_oauth" && c.Kind != "dimagent" {
+		return errors.New("只有 DimAgent 渠道支持本机授权")
+	}
+	if c.AuthMode == "cli_oauth" && c.APIKey != "" {
+		return errors.New("使用本机 DimAgent 授权时不要填写 API Key")
+	}
 	c.MessagesBaseURL = strings.TrimRight(strings.TrimSpace(c.MessagesBaseURL), "/")
 	if c.SupportsMessages {
 		mu, err := url.Parse(c.MessagesBaseURL)
@@ -128,17 +145,26 @@ func (s *Server) SaveChannel(c *Channel) error {
 		}
 	}
 	if c.ID == 0 {
-		if c.APIKey == "" {
+		if c.AuthMode == "api_key" && c.APIKey == "" {
 			return errors.New("请输入 API Key")
 		}
-		r, e := s.db.Exec(`INSERT INTO channels(name,base_url,api_key,model,remote_model,enabled,paid,auto_paid,priority,kind,supports_tools,supports_images,supports_responses,supports_messages,messages_base_url) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, c.Name, c.BaseURL, c.APIKey, c.Model, c.RemoteModel, c.Enabled, c.Paid, c.AutoPaid, c.Priority, c.Kind, c.SupportsTools, c.SupportsImages, c.SupportsResponses, c.SupportsMessages, c.MessagesBaseURL)
+		r, e := s.db.Exec(`INSERT INTO channels(name,base_url,api_key,model,remote_model,enabled,paid,auto_paid,priority,kind,supports_tools,supports_images,supports_responses,supports_messages,messages_base_url,auth_mode) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, c.Name, c.BaseURL, c.APIKey, c.Model, c.RemoteModel, c.Enabled, c.Paid, c.AutoPaid, c.Priority, c.Kind, c.SupportsTools, c.SupportsImages, c.SupportsResponses, c.SupportsMessages, c.MessagesBaseURL, c.AuthMode)
 		if e != nil {
 			return e
 		}
 		c.ID, e = r.LastInsertId()
 		return e
 	}
-	result, e := s.db.Exec(`UPDATE channels SET name=?,base_url=?,api_key=CASE WHEN ?='' THEN api_key ELSE ? END,model=?,remote_model=?,enabled=?,paid=?,auto_paid=?,priority=?,kind=?,supports_tools=?,supports_images=?,supports_responses=?,supports_messages=?,messages_base_url=? WHERE id=?`, c.Name, c.BaseURL, c.APIKey, c.APIKey, c.Model, c.RemoteModel, c.Enabled, c.Paid, c.AutoPaid, c.Priority, c.Kind, c.SupportsTools, c.SupportsImages, c.SupportsResponses, c.SupportsMessages, c.MessagesBaseURL, c.ID)
+	if c.AuthMode == "api_key" && c.APIKey == "" {
+		var oldMode, oldKey string
+		if err := s.db.QueryRow(`SELECT auth_mode,api_key FROM channels WHERE id=?`, c.ID).Scan(&oldMode, &oldKey); err != nil {
+			return errors.New("渠道不存在")
+		}
+		if oldMode != "api_key" || oldKey == "" {
+			return errors.New("请输入 API Key")
+		}
+	}
+	result, e := s.db.Exec(`UPDATE channels SET name=?,base_url=?,api_key=CASE WHEN ?='cli_oauth' THEN '' WHEN ?='' AND auth_mode='api_key' THEN api_key ELSE ? END,model=?,remote_model=?,enabled=?,paid=?,auto_paid=?,priority=?,kind=?,supports_tools=?,supports_images=?,supports_responses=?,supports_messages=?,messages_base_url=?,auth_mode=? WHERE id=?`, c.Name, c.BaseURL, c.AuthMode, c.APIKey, c.APIKey, c.Model, c.RemoteModel, c.Enabled, c.Paid, c.AutoPaid, c.Priority, c.Kind, c.SupportsTools, c.SupportsImages, c.SupportsResponses, c.SupportsMessages, c.MessagesBaseURL, c.AuthMode, c.ID)
 	if e != nil {
 		return e
 	}
@@ -149,7 +175,7 @@ func (s *Server) SaveChannel(c *Channel) error {
 	return e
 }
 func (s *Server) channels() ([]Channel, error) {
-	rows, e := s.db.Query(`SELECT id,name,base_url,api_key,model,remote_model,enabled,paid,auto_paid,priority,kind,supports_tools,supports_images,supports_responses,supports_messages,messages_base_url FROM channels ORDER BY priority,id`)
+	rows, e := s.db.Query(`SELECT id,name,base_url,api_key,model,remote_model,enabled,paid,auto_paid,priority,kind,supports_tools,supports_images,supports_responses,supports_messages,messages_base_url,auth_mode FROM channels ORDER BY priority,id`)
 	if e != nil {
 		return nil, e
 	}
@@ -157,7 +183,7 @@ func (s *Server) channels() ([]Channel, error) {
 	cs := []Channel{}
 	for rows.Next() {
 		var c Channel
-		if e = rows.Scan(&c.ID, &c.Name, &c.BaseURL, &c.APIKey, &c.Model, &c.RemoteModel, &c.Enabled, &c.Paid, &c.AutoPaid, &c.Priority, &c.Kind, &c.SupportsTools, &c.SupportsImages, &c.SupportsResponses, &c.SupportsMessages, &c.MessagesBaseURL); e != nil {
+		if e = rows.Scan(&c.ID, &c.Name, &c.BaseURL, &c.APIKey, &c.Model, &c.RemoteModel, &c.Enabled, &c.Paid, &c.AutoPaid, &c.Priority, &c.Kind, &c.SupportsTools, &c.SupportsImages, &c.SupportsResponses, &c.SupportsMessages, &c.MessagesBaseURL, &c.AuthMode); e != nil {
 			return nil, e
 		}
 		c.HasKey = c.APIKey != ""
@@ -182,6 +208,9 @@ func (s *Server) Handler(webDir string) http.Handler {
 			return
 		}
 		for i := range cs {
+			if cs[i].AuthMode == "cli_oauth" {
+				cs[i].AuthState, cs[i].AuthMessage = dimAuthState()
+			}
 			cs[i].APIKey = ""
 		}
 		jsonOut(w, 200, cs)
@@ -197,7 +226,7 @@ func (s *Server) Handler(webDir string) http.Handler {
 			return
 		}
 		c.APIKey = ""
-		c.HasKey = true
+		c.HasKey = c.AuthMode == "api_key"
 		jsonOut(w, 201, c)
 	})
 	m.HandleFunc("PUT /api/channels/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -217,7 +246,7 @@ func (s *Server) Handler(webDir string) http.Handler {
 			return
 		}
 		c.APIKey = ""
-		c.HasKey = true
+		c.HasKey = c.AuthMode == "api_key"
 		jsonOut(w, 200, c)
 	})
 	m.HandleFunc("DELETE /api/channels/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -282,15 +311,25 @@ func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 		if c.ID != id {
 			continue
 		}
-		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, c.BaseURL+"/models", nil)
+		catalogURL := c.BaseURL + "/models"
+		if c.AuthMode == "cli_oauth" {
+			catalogURL += "?type=dim"
+		}
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, catalogURL, nil)
 		if err != nil {
 			fail(w, 400, "无效渠道地址")
 			return
 		}
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-		if c.Kind == "opencode_go" {
+		credential, err := s.credential(c)
+		if err != nil {
+			fail(w, 400, err.Error())
+			return
+		}
+		req.Header.Set("Authorization", "Bearer "+credential)
+		if c.Kind == "opencode_go" || c.Kind == "dimagent" {
 			req.Header.Set("User-Agent", "SeekWell/0.1")
 		}
+		applyDimOAuthHeaders(req, c)
 		resp, err := s.client.Do(req)
 		if err != nil {
 			fail(w, 502, "无法连接渠道模型目录")
@@ -350,7 +389,15 @@ func (s *Server) speedtest(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+		credential, err := s.credential(c)
+		if err != nil {
+			fail(w, 400, err.Error())
+			return
+		}
+		req.Header.Set("Authorization", "Bearer "+credential)
+		if c.Kind == "dimagent" {
+			req.Header.Set("User-Agent", "SeekWell/0.1")
+		}
 		if c.Kind == "opencode_go" {
 			var session [16]byte
 			if _, err := rand.Read(session[:]); err != nil {
@@ -361,6 +408,7 @@ func (s *Server) speedtest(w http.ResponseWriter, r *http.Request) {
 			req.Header.Set("User-Agent", "SeekWell/0.1")
 		}
 		start := time.Now()
+		applyDimOAuthHeaders(req, c)
 		resp, err := s.client.Do(req)
 		if err != nil {
 			s.failSpeedtest(w, ctx, start)
@@ -463,7 +511,15 @@ func (s *Server) modelTest(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+		credential, err := s.credential(c)
+		if err != nil {
+			fail(w, 400, err.Error())
+			return
+		}
+		req.Header.Set("Authorization", "Bearer "+credential)
+		if c.Kind == "dimagent" {
+			req.Header.Set("User-Agent", "SeekWell/0.1")
+		}
 		if c.Kind == "opencode_go" {
 			var session [16]byte
 			if _, err := rand.Read(session[:]); err != nil {
@@ -474,7 +530,7 @@ func (s *Server) modelTest(w http.ResponseWriter, r *http.Request) {
 			req.Header.Set("User-Agent", "SeekWell/0.1")
 		}
 		if input.Protocol == "messages" {
-			req.Header.Set("x-api-key", c.APIKey)
+			req.Header.Set("x-api-key", credential)
 			version := r.Header.Get("anthropic-version")
 			if version == "" {
 				version = "2023-06-01"
@@ -485,6 +541,7 @@ func (s *Server) modelTest(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		start := time.Now()
+		applyDimOAuthHeaders(req, c)
 		resp, err := s.client.Do(req)
 		if err != nil {
 			elapsed := time.Since(start).Milliseconds()
@@ -656,7 +713,15 @@ func (s *Server) proxyModel(w http.ResponseWriter, r *http.Request, path string)
 			continue
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+		credential, err := s.credential(c)
+		if err != nil {
+			s.record(model, c.Name, c.Kind, 0, start)
+			continue
+		}
+		req.Header.Set("Authorization", "Bearer "+credential)
+		if c.Kind == "dimagent" {
+			req.Header.Set("User-Agent", "SeekWell/0.1")
+		}
 		if c.Kind == "opencode_go" {
 			upstreamSession := session
 			if upstreamSession == "" {
@@ -671,7 +736,7 @@ func (s *Server) proxyModel(w http.ResponseWriter, r *http.Request, path string)
 			req.Header.Set("User-Agent", "SeekWell/0.1")
 		}
 		if path == "/messages" {
-			req.Header.Set("x-api-key", c.APIKey)
+			req.Header.Set("x-api-key", credential)
 			version := r.Header.Get("anthropic-version")
 			if version == "" {
 				version = "2023-06-01"
@@ -681,6 +746,7 @@ func (s *Server) proxyModel(w http.ResponseWriter, r *http.Request, path string)
 				req.Header.Set("anthropic-beta", beta)
 			}
 		}
+		applyDimOAuthHeaders(req, c)
 		resp, e := s.client.Do(req)
 		if e != nil {
 			s.record(model, c.Name, c.Kind, 0, start)
@@ -768,6 +834,7 @@ func (s *Server) proxyTool(w http.ResponseWriter, r *http.Request, path string) 
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+		applyDimOAuthHeaders(req, c)
 		resp, e := s.client.Do(req)
 		if e != nil {
 			continue

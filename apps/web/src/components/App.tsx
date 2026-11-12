@@ -95,6 +95,7 @@ export default function App() {
     setDraft((current) => ({
       ...current,
       kind,
+      auth_mode: dimAgent ? current.auth_mode : 'api_key',
       base_url: official
         ? 'https://api.deepseek.com/v1'
         : openCodeGo
