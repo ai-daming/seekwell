@@ -46,6 +46,7 @@ export function Shell({ tab, refreshing, onTabChange, onRefresh, children }: She
               key={item.id}
               type="button"
               className="nav-item"
+              aria-label={item.label}
               aria-current={tab === item.id ? 'page' : undefined}
               onClick={() => onTabChange(item.id)}
             >

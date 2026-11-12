@@ -41,29 +41,31 @@ export function ActivityTable({ entries }: { entries: Entry[] }) {
           </tr>
         </thead>
         <tbody>
-          {entries.map((entry, index) => (
-            <tr key={`${entry.created_at}-${entry.model}-${index}`}>
-              <td>
-                <span className="activity-time">{formatTime(entry.created_at)}</span>
-              </td>
-              <td>
-                <span className="activity-model mono">{entry.model}</span>
-              </td>
-              <td>
-                <span className="activity-channel">{entry.channel}</span>
-              </td>
-              <td>
-                <span
-                  className={`activity-status ${entry.status === 0 ? 'activity-status--error' : ''}`}
-                >
-                  {entry.status === 0 ? copy.statusZero : entry.status}
-                </span>
-              </td>
-              <td>
-                <span className="activity-duration">{entry.duration_ms ?? 0} ms</span>
-              </td>
-            </tr>
-          ))}
+          {entries.map((entry, index) => {
+            const { status } = entry;
+            const failed = status === 0 || status >= 400;
+            return (
+              <tr key={`${entry.created_at}-${entry.model}-${index}`}>
+                <td>
+                  <span className="activity-time">{formatTime(entry.created_at)}</span>
+                </td>
+                <td>
+                  <span className="activity-model mono">{entry.model}</span>
+                </td>
+                <td>
+                  <span className="activity-channel">{entry.channel}</span>
+                </td>
+                <td>
+                  <span className={`activity-status ${failed ? 'activity-status--error' : ''}`}>
+                    {status === 0 ? copy.statusZero : status}
+                  </span>
+                </td>
+                <td>
+                  <span className="activity-duration">{entry.duration_ms ?? 0} ms</span>
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

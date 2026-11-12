@@ -182,3 +182,39 @@ test('T11 时间、空耗时与非法日期安全', () => {
   assert.match(componentSource, /duration_ms\s*\?\?\s*0/, 'duration_ms 缺失时未回退 0');
   assert.match(componentSource, /try\s*\{[\s\S]*?new Date\([\s\S]*?catch/, '非法日期未做异常保护');
 });
+
+test('T12 窄屏图标导航仍保留可访问名称', () => {
+  const shell = read(join(componentsRoot, 'Shell.tsx'));
+  assert.match(shell, /aria-label=\{item\.label\}/, '导航按钮缺少 aria-label，窄屏隐藏文字后会失去可访问名称');
+  assert.match(allCss, /\.nav-item__label[\s\S]*?display:\s*none/, '窄屏文字隐藏规则缺失');
+});
+
+test('T13 4xx/5xx 状态码按错误渲染', () => {
+  const activity = read(join(componentsRoot, 'ActivityTable.tsx'));
+  assert.match(
+    activity,
+    /status\s*===\s*0\s*\|\|\s*status\s*>=\s*400|status\s*>=\s*400\s*\|\|\s*status\s*===\s*0/,
+    '仅 status=0 被标红，4xx/5xx 仍显示为成功',
+  );
+});
+
+test('T14 静默刷新不卸载表格', () => {
+  const app = read(join(componentsRoot, 'App.tsx'));
+  assert.match(app, /function refresh\(silent\s*=\s*false\)/, 'refresh 缺少静默模式');
+  assert.match(app, /if\s*\(!silent\)\s*setLoading\(true\)/, '静默刷新仍会显示加载态');
+  assert.match(app, /refresh\(true\)/, '保存/启停/删除后未使用静默刷新');
+});
+
+test('T15 干净检出直接 make test 可跑前端', () => {
+  const makefile = read(join(webRoot, '..', '..', 'Makefile'));
+  assert.match(
+    makefile,
+    /web-test:\s*\n\tcd apps\/web && npm ci && npm run test/,
+    'web-test 未安装依赖，干净检出会报 tsc: not found',
+  );
+  assert.match(
+    makefile,
+    /test:\s*\n\tcd apps\/server && go test \.\/internal\/core\n\t\$\(MAKE\) web-test/,
+    'test 目标未复用带依赖安装的 web-test',
+  );
+});
