@@ -76,6 +76,7 @@ export const freshDraft = (): Draft => ({
 export const kindLabel = (kind: string): string => {
   if (kind === 'deepseek') return 'DeepSeek 官方';
   if (kind === 'opencode_go') return 'OpenCode Go';
+  if (kind === 'dimagent') return 'DimAgent';
   if (kind === 'compatible') return '兼容 API / 网关';
   return '未知';
 };
