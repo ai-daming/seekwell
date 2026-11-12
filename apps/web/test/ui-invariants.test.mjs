@@ -231,3 +231,26 @@ test('T16 测速入口、付费确认与结果展示', () => {
   assert.match(componentSource, /duration_ms/, '测速结果未展示耗时');
   assert.match(componentSource, /result\.status/, '测速结果未展示上游状态码');
 });
+
+test('T17 调用记录展示渠道类型且未知不猜', () => {
+  const typeSource = read(join(srcRoot, 'types.ts'));
+  assert.match(typeSource, /export type Entry\s*=\s*\{[\s\S]*?kind:\s*string;[\s\S]*?\};/, 'Entry 缺少 kind 字段');
+
+  const kindBlock = typeSource.match(/export const kindLabel[\s\S]*?\n\};/);
+  assert.ok(kindBlock, '无法读取 kindLabel 定义');
+  assert.match(kindBlock[0], /kind === 'deepseek'\)\s*return 'DeepSeek 官方'/, 'deepseek 文案缺失');
+  assert.match(kindBlock[0], /kind === 'opencode_go'\)\s*return 'OpenCode Go'/, 'opencode_go 文案缺失');
+  assert.match(kindBlock[0], /kind === 'compatible'\)\s*return '兼容 API \/ 网关'/, 'compatible 文案缺失');
+  assert.match(kindBlock[0], /return '未知'/, '空值或未知类型未显示「未知」');
+
+  const activity = read(join(componentsRoot, 'ActivityTable.tsx'));
+  assert.match(
+    activity,
+    /<th>时间<\/th>\s*<th>统一模型<\/th>\s*<th>渠道<\/th>\s*<th>渠道类型<\/th>\s*<th>状态码<\/th>\s*<th>耗时<\/th>/,
+    '调用记录表头缺少「渠道类型」或顺序不对',
+  );
+  assert.match(activity, /kindLabel\(entry\.kind\)/, '调用记录未复用 kindLabel');
+
+  const channels = read(join(componentsRoot, 'ChannelsTable.tsx'));
+  assert.match(channels, /kindLabel\(channel\.kind\)/, '渠道管理页未复用 kindLabel');
+});

@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -172,6 +173,9 @@ func TestSearchForwarding(t *testing.T) {
 	if e := s.SaveChannel(&c); e != nil {
 		t.Fatal(e)
 	}
+	if got := historyRaw(t, h); strings.TrimSpace(string(got)) != "[]" {
+		t.Fatalf("unexpected request history before search: %s", got)
+	}
 	res, e := http.Post(h.URL+"/v1/tools/search", "application/json", strings.NewReader(`{"query":"DeepSeek"}`))
 	if e != nil {
 		t.Fatal(e)
@@ -180,6 +184,9 @@ func TestSearchForwarding(t *testing.T) {
 	b, _ := io.ReadAll(res.Body)
 	if res.StatusCode != 200 || calls != 1 || !strings.Contains(string(b), "result") {
 		t.Fatalf("%d %s", res.StatusCode, b)
+	}
+	if got := historyRaw(t, h); strings.TrimSpace(string(got)) != "[]" {
+		t.Fatalf("search wrote request history: %s", got)
 	}
 }
 func TestEditingRetainsCredentialAndSurvivesRestart(t *testing.T) {
@@ -601,5 +608,297 @@ func TestSpeedTestConnectionFailure(t *testing.T) {
 	message := errorMessage(t, b)
 	if !strings.Contains(message, "连接") || !strings.Contains(message, "已耗时") {
 		t.Fatalf("unexpected connection message %q", message)
+	}
+}
+
+type historyEntry struct {
+	CreatedAt  string `json:"created_at"`
+	Model      string `json:"model"`
+	Channel    string `json:"channel"`
+	Kind       string `json:"kind"`
+	Status     int    `json:"status"`
+	DurationMS int    `json:"duration_ms"`
+}
+
+func historyRaw(t *testing.T, h *httptest.Server) []byte {
+	t.Helper()
+	resp, err := http.Get(h.URL + "/api/requests")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /api/requests = %d: %s", resp.StatusCode, b)
+	}
+	return b
+}
+
+func historyEntries(t *testing.T, h *httptest.Server) []historyEntry {
+	t.Helper()
+	var out []historyEntry
+	if err := json.Unmarshal(historyRaw(t, h), &out); err != nil {
+		t.Fatalf("invalid history response: %v", err)
+	}
+	return out
+}
+
+func TestRequestHistoryRecordsChannelKind(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"ok":true}`)
+	}))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	c := saveTestChannel(t, s, Channel{Name: "official", BaseURL: upstream.URL + "/v1", APIKey: "k", Model: "deepseek-flash", RemoteModel: "deepseek-flash", Enabled: true, Kind: "deepseek"})
+	resp, err := http.Post(h.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"deepseek-flash","messages":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	got := historyEntries(t, h)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 entry, got %d: %+v", len(got), got)
+	}
+	if got[0].Kind != "deepseek" || got[0].Channel != c.Name || got[0].Status != 200 || got[0].Model != "deepseek-flash" {
+		t.Fatalf("unexpected history entry: %+v", got[0])
+	}
+}
+
+func TestRequestHistoryRecordsEachAttemptKind(t *testing.T) {
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(429) }))
+	defer bad.Close()
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, `{"ok":true}`) }))
+	defer good.Close()
+	s, h := newTestServer(t)
+	saveTestChannel(t, s, Channel{Name: "official", BaseURL: bad.URL + "/v1", APIKey: "k", Model: "deepseek-flash", RemoteModel: "deepseek-flash", Enabled: true, Kind: "deepseek", Priority: 0})
+	saveTestChannel(t, s, Channel{Name: "opencode", BaseURL: good.URL + "/v1", APIKey: "k", Model: "deepseek-flash", RemoteModel: "deepseek-flash", Enabled: true, Kind: "opencode_go", Priority: 1})
+	resp, err := http.Post(h.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"deepseek-flash","messages":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	got := historyEntries(t, h)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 entries, got %d: %+v", len(got), got)
+	}
+	if got[0].Channel != "opencode" || got[0].Kind != "opencode_go" || got[0].Status != 200 {
+		t.Fatalf("unexpected newest entry: %+v", got[0])
+	}
+	if got[1].Channel != "official" || got[1].Kind != "deepseek" || got[1].Status != 429 {
+		t.Fatalf("unexpected oldest entry: %+v", got[1])
+	}
+}
+
+func TestRequestHistoryKindIsSnapshot(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, `{"ok":true}`) }))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	c := saveTestChannel(t, s, Channel{Name: "old-name", BaseURL: upstream.URL + "/v1", APIKey: "k", Model: "deepseek-flash", RemoteModel: "deepseek-flash", Enabled: true, Kind: "deepseek"})
+	resp, err := http.Post(h.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"deepseek-flash","messages":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	c.Name = "new-name"
+	c.Kind = "compatible"
+	c.APIKey = ""
+	body, _ := json.Marshal(c)
+	req, _ := http.NewRequest(http.MethodPut, h.URL+"/api/channels/"+strconv.FormatInt(c.ID, 10), bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	updated, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, updated.Body)
+	updated.Body.Close()
+	if updated.StatusCode != 200 {
+		t.Fatalf("update status %d", updated.StatusCode)
+	}
+	got := historyEntries(t, h)
+	if len(got) != 1 || got[0].Channel != "old-name" || got[0].Kind != "deepseek" {
+		t.Fatalf("history changed with channel config: %+v", got)
+	}
+}
+
+func TestOldDatabaseMigratesRequestKind(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, `{"ok":true}`) }))
+	defer upstream.Close()
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE channels (id INTEGER PRIMARY KEY, name TEXT NOT NULL, base_url TEXT NOT NULL, api_key TEXT NOT NULL, model TEXT NOT NULL, remote_model TEXT NOT NULL, enabled INTEGER NOT NULL, paid INTEGER NOT NULL, auto_paid INTEGER NOT NULL, priority INTEGER NOT NULL, kind TEXT NOT NULL, supports_tools INTEGER NOT NULL DEFAULT 0, supports_images INTEGER NOT NULL DEFAULT 0, supports_responses INTEGER NOT NULL DEFAULT 0, supports_messages INTEGER NOT NULL DEFAULT 0, messages_base_url TEXT NOT NULL DEFAULT '');
+CREATE TABLE requests (id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, model TEXT NOT NULL, channel TEXT NOT NULL, status INTEGER NOT NULL, duration_ms INTEGER NOT NULL);`)
+	if err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`INSERT INTO channels(id,name,base_url,api_key,model,remote_model,enabled,paid,auto_paid,priority,kind,supports_tools,supports_images,supports_responses,supports_messages,messages_base_url) VALUES(1,'legacy',?,'k','deepseek-flash','deepseek-flash',1,0,0,0,'deepseek',0,0,0,0,'')`, upstream.URL+"/v1")
+	if err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`INSERT INTO requests(created_at,model,channel,status,duration_ms) VALUES(?,?,?,?,?)`, time.Now().UTC().Format(time.RFC3339), "deepseek-flash", "legacy", 429, 12)
+	if err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	h := httptest.NewServer(s.Handler(""))
+	defer h.Close()
+	raw := historyRaw(t, h)
+	if !bytes.Contains(raw, []byte(`"kind":""`)) {
+		t.Fatalf("legacy kind is not serialized as empty string: %s", raw)
+	}
+	got := historyEntries(t, h)
+	if len(got) != 1 || got[0].Channel != "legacy" || got[0].Kind != "" || got[0].Status != 429 {
+		t.Fatalf("legacy history not preserved: %+v", got)
+	}
+	resp, err := http.Post(h.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"deepseek-flash","messages":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	got = historyEntries(t, h)
+	if len(got) != 2 || got[0].Kind != "deepseek" || got[0].Status != 200 || got[1].Kind != "" {
+		t.Fatalf("unexpected history after migration: %+v", got)
+	}
+}
+
+func TestEmptyChannelKindStillRecords(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, `{"ok":true}`) }))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	_, err := s.db.Exec(`INSERT INTO channels(name,base_url,api_key,model,remote_model,enabled,paid,auto_paid,priority,kind,supports_tools,supports_images,supports_responses,supports_messages,messages_base_url) VALUES('legacy-kind',?,'k','deepseek-flash','deepseek-flash',1,0,0,0,'',0,0,0,0,'')`, upstream.URL+"/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(h.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"deepseek-flash","messages":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	raw := historyRaw(t, h)
+	if !bytes.Contains(raw, []byte(`"kind":""`)) {
+		t.Fatalf("empty channel kind is not serialized as empty string: %s", raw)
+	}
+	got := historyEntries(t, h)
+	if len(got) != 1 || got[0].Channel != "legacy-kind" || got[0].Kind != "" || got[0].Status != 200 {
+		t.Fatalf("unexpected history entry: %+v", got)
+	}
+}
+
+func TestRequestHistoryKindOnTransportFailure(t *testing.T) {
+	closed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	closedURL := closed.URL
+	closed.Close()
+	s, h := newTestServer(t)
+	saveTestChannel(t, s, Channel{Name: "gateway", BaseURL: closedURL + "/v1", APIKey: "k", Model: "deepseek-flash", RemoteModel: "deepseek-flash", Enabled: true, Kind: "compatible"})
+	resp, err := http.Post(h.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"deepseek-flash","messages":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 502 {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	got := historyEntries(t, h)
+	if len(got) != 1 || got[0].Status != 0 || got[0].Kind != "compatible" || got[0].Channel != "gateway" {
+		t.Fatalf("unexpected transport failure entry: %+v", got)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type interruptingReader struct{ sent bool }
+
+func (i *interruptingReader) Read(p []byte) (int, error) {
+	if !i.sent {
+		i.sent = true
+		return copy(p, "data: partial\n\n"), nil
+	}
+	return 0, io.ErrUnexpectedEOF
+}
+func (i *interruptingReader) Close() error { return nil }
+
+func TestRequestHistoryKindOnInterruptedStream(t *testing.T) {
+	s, h := newTestServer(t)
+	saveTestChannel(t, s, Channel{Name: "official", BaseURL: "http://upstream.invalid/v1", APIKey: "k", Model: "deepseek-flash", RemoteModel: "deepseek-flash", Enabled: true, Kind: "deepseek"})
+	s.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: &interruptingReader{}}, nil
+	})}
+	resp, err := http.Post(h.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"deepseek-flash","messages":[]}`))
+	if err == nil {
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+	got := historyEntries(t, h)
+	if len(got) != 1 || got[0].Status != 0 || got[0].Kind != "deepseek" {
+		t.Fatalf("unexpected interrupted stream entry: %+v", got)
+	}
+}
+
+func TestRequestHistoryShapeAndLimit(t *testing.T) {
+	s, h := newTestServer(t)
+	if raw := historyRaw(t, h); strings.TrimSpace(string(raw)) != "[]" {
+		t.Fatalf("empty history must be []: %s", raw)
+	}
+	for i := 0; i < 105; i++ {
+		_, err := s.db.Exec(`INSERT INTO requests(created_at,model,channel,status,duration_ms,kind) VALUES(?,?,?,?,?,?)`, time.Now().UTC().Format(time.RFC3339), "deepseek-flash", "channel", i, i*10, "deepseek")
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw := historyRaw(t, h)
+	var shaped []map[string]any
+	if err := json.Unmarshal(raw, &shaped); err != nil {
+		t.Fatalf("invalid history response: %v", err)
+	}
+	if len(shaped) != 100 {
+		t.Fatalf("expected 100 entries, got %d", len(shaped))
+	}
+	for _, key := range []string{"created_at", "model", "channel", "status", "duration_ms", "kind"} {
+		if _, ok := shaped[0][key]; !ok {
+			t.Fatalf("history entry missing %q: %v", key, shaped[0])
+		}
+	}
+	got := historyEntries(t, h)
+	if got[0].Status != 104 || got[0].DurationMS != 1040 || got[0].Kind != "deepseek" || got[0].Model != "deepseek-flash" || got[0].Channel != "channel" || got[0].CreatedAt == "" {
+		t.Fatalf("unexpected newest entry: %+v", got[0])
+	}
+	if got[99].Status != 5 {
+		t.Fatalf("history is not newest-first or limited to 100: %+v", got[99])
 	}
 }
