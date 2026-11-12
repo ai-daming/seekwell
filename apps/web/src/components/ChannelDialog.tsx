@@ -93,17 +93,27 @@ export function ChannelDialog({
             <small>填写包含 /v1 的 API 根地址。</small>
           </label>
 
-          <label className="field">
-            API Key
-            <input
-              type="password"
-              required={!editing}
-              autoComplete="off"
-              value={draft.api_key || ''}
-              onChange={(event) => onChange('api_key', event.target.value)}
-              placeholder={editing ? copy.keyKeptPlaceholder : '输入渠道的 API Key'}
-            />
-          </label>
+          {draft.kind === 'dimagent' && (
+            <label className="field">
+              {copy.authModeLabel}
+              <select value={draft.auth_mode} onChange={(event) => {
+                const mode = event.target.value as Draft['auth_mode'];
+                onChange('auth_mode', mode);
+                if (mode === 'cli_oauth') onChange('api_key', '');
+              }}>
+                <option value="api_key">填 API Key</option>
+                <option value="cli_oauth">{copy.authModeCli}</option>
+              </select>
+            </label>
+          )}
+          {draft.auth_mode === 'cli_oauth' ? <p className="form-hint">{copy.dimAuthHint}</p> : (
+            <label className="field">
+              API Key
+              <input type="password" required={!editing} autoComplete="off"
+                value={draft.api_key || ''} onChange={(event) => onChange('api_key', event.target.value)}
+                placeholder={editing ? copy.keyKeptPlaceholder : '输入渠道的 API Key'} />
+            </label>
+          )}
 
           <div className="field-grid">
             <label className="field">

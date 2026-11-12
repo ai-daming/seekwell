@@ -1389,7 +1389,7 @@ func TestDimAgentKindRoundTripAndBoundaries(t *testing.T) {
 	}
 	raw, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != 200 || bytes.Contains(raw, []byte("secret-key")) || bytes.Contains(raw, []byte(`"api_key"`)) {
+	if resp.StatusCode != 200 || bytes.Contains(raw, []byte("secret-key")) || bytes.Contains(raw, []byte(`"api_key":`)) {
 		t.Fatalf("unexpected channels response %d: %s", resp.StatusCode, raw)
 	}
 	var listed []Channel
@@ -1647,8 +1647,8 @@ func TestDimAgentDiscover(t *testing.T) {
 	if gotAuth != "Bearer secret-key" {
 		t.Fatalf("missing bearer token: %q", gotAuth)
 	}
-	if gotSession != "" || gotUserAgent == "SeekWell/0.1" {
-		t.Fatalf("dimagent inherited opencode headers: session=%q user-agent=%q", gotSession, gotUserAgent)
+	if gotSession != "" || gotUserAgent != "SeekWell/0.1" {
+		t.Fatalf("unexpected dimagent headers: session=%q user-agent=%q", gotSession, gotUserAgent)
 	}
 	if bytes.Contains(body, []byte("secret-key")) {
 		t.Fatalf("discover response leaked the api key: %s", body)

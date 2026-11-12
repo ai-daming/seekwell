@@ -95,6 +95,7 @@ export function ChannelsTable({
                   {channel.enabled ? '已启用' : '已停用'}
                 </span>
                 <small className="cell-sub">{copy.unverifiedAvailability}</small>
+                {channel.auth_state && channel.auth_state !== 'ok' && <small className="cell-sub error">{channel.auth_message}</small>}
               </td>
               <td className="priority">{String(channel.priority).padStart(2, '0')}</td>
               <td>
