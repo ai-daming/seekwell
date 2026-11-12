@@ -1,5 +1,5 @@
 import { copy } from '../copy';
-import type { Entry } from '../types';
+import { kindLabel, type Entry } from '../types';
 import { Icon } from './Icon';
 import './Activity.css';
 import './Channels.css';
@@ -36,6 +36,7 @@ export function ActivityTable({ entries }: { entries: Entry[] }) {
             <th>时间</th>
             <th>统一模型</th>
             <th>渠道</th>
+            <th>渠道类型</th>
             <th>状态码</th>
             <th>耗时</th>
           </tr>
@@ -54,6 +55,9 @@ export function ActivityTable({ entries }: { entries: Entry[] }) {
                 </td>
                 <td>
                   <span className="activity-channel">{entry.channel}</span>
+                </td>
+                <td>
+                  <span className="activity-channel">{kindLabel(entry.kind)}</span>
                 </td>
                 <td>
                   <span className={`activity-status ${failed ? 'activity-status--error' : ''}`}>

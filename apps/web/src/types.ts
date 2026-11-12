@@ -22,6 +22,7 @@ export type Entry = {
   created_at: string;
   model: string;
   channel: string;
+  kind: string;
   status: number;
   duration_ms: number;
 };
@@ -57,5 +58,6 @@ export const freshDraft = (): Draft => ({
 export const kindLabel = (kind: string): string => {
   if (kind === 'deepseek') return 'DeepSeek 官方';
   if (kind === 'opencode_go') return 'OpenCode Go';
-  return '兼容 API / 网关';
+  if (kind === 'compatible') return '兼容 API / 网关';
+  return '未知';
 };

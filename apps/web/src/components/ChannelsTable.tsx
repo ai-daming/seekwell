@@ -1,5 +1,5 @@
 import { copy } from '../copy';
-import type { Channel } from '../types';
+import { kindLabel, type Channel } from '../types';
 import { Icon } from './Icon';
 import './Channels.css';
 
@@ -69,13 +69,7 @@ export function ChannelsTable({
                   </span>
                   <span className="channel-cell__text">
                     <b className="channel-cell__name">{channel.name}</b>
-                    <small className="cell-sub">
-                      {channel.kind === 'deepseek'
-                        ? 'DeepSeek 官方'
-                        : channel.kind === 'opencode_go'
-                          ? 'OpenCode Go'
-                          : '兼容 API / 网关'}
-                    </small>
+                    <small className="cell-sub">{kindLabel(channel.kind)}</small>
                   </span>
                 </div>
               </td>

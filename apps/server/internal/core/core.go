@@ -62,7 +62,7 @@ func New(path string) (*Server, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS channels (id INTEGER PRIMARY KEY, name TEXT NOT NULL, base_url TEXT NOT NULL, api_key TEXT NOT NULL, model TEXT NOT NULL, remote_model TEXT NOT NULL, enabled INTEGER NOT NULL, paid INTEGER NOT NULL, auto_paid INTEGER NOT NULL, priority INTEGER NOT NULL, kind TEXT NOT NULL); CREATE TABLE IF NOT EXISTS requests (id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, model TEXT NOT NULL, channel TEXT NOT NULL, status INTEGER NOT NULL, duration_ms INTEGER NOT NULL);`)
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS channels (id INTEGER PRIMARY KEY, name TEXT NOT NULL, base_url TEXT NOT NULL, api_key TEXT NOT NULL, model TEXT NOT NULL, remote_model TEXT NOT NULL, enabled INTEGER NOT NULL, paid INTEGER NOT NULL, auto_paid INTEGER NOT NULL, priority INTEGER NOT NULL, kind TEXT NOT NULL); CREATE TABLE IF NOT EXISTS requests (id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, model TEXT NOT NULL, channel TEXT NOT NULL, status INTEGER NOT NULL, duration_ms INTEGER NOT NULL, kind TEXT NOT NULL DEFAULT '');`)
 	if err != nil {
 		db.Close()
 		return nil, err
@@ -80,6 +80,14 @@ func New(path string) (*Server, error) {
 			db.Close()
 			return nil, err
 		}
+	}
+	var kindColumns int
+	if err = db.QueryRow(`SELECT count(*) FROM pragma_table_info('requests') WHERE name='kind'`).Scan(&kindColumns); err == nil && kindColumns == 0 {
+		_, err = db.Exec(`ALTER TABLE requests ADD COLUMN kind TEXT NOT NULL DEFAULT ''`)
+	}
+	if err != nil {
+		db.Close()
+		return nil, err
 	}
 	_ = os.Chmod(path, 0600)
 	return &Server{db: db, client: &http.Client{Timeout: 5 * time.Minute}, speedTimeout: 30 * time.Second, sessions: make(map[string]sessionBinding)}, nil
@@ -367,7 +375,7 @@ func (s *Server) failSpeedtest(w http.ResponseWriter, ctx context.Context, start
 	fail(w, 502, fmt.Sprintf("无法连接渠道（已耗时 %dms）", elapsed))
 }
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {
-	rows, e := s.db.Query(`SELECT created_at,model,channel,status,duration_ms FROM requests ORDER BY id DESC LIMIT 100`)
+	rows, e := s.db.Query(`SELECT created_at,model,channel,kind,status,duration_ms FROM requests ORDER BY id DESC LIMIT 100`)
 	if e != nil {
 		fail(w, 500, "读取记录失败")
 		return
@@ -375,18 +383,18 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	out := []map[string]any{}
 	for rows.Next() {
-		var at, model, ch string
+		var at, model, ch, kind string
 		var status, ms int
-		if e = rows.Scan(&at, &model, &ch, &status, &ms); e != nil {
+		if e = rows.Scan(&at, &model, &ch, &kind, &status, &ms); e != nil {
 			fail(w, 500, "读取记录失败")
 			return
 		}
-		out = append(out, map[string]any{"created_at": at, "model": model, "channel": ch, "status": status, "duration_ms": ms})
+		out = append(out, map[string]any{"created_at": at, "model": model, "channel": ch, "kind": kind, "status": status, "duration_ms": ms})
 	}
 	jsonOut(w, 200, out)
 }
-func (s *Server) record(model, name string, status int, start time.Time) {
-	_, _ = s.db.Exec(`INSERT INTO requests(created_at,model,channel,status,duration_ms) VALUES(?,?,?,?,?)`, time.Now().UTC().Format(time.RFC3339), model, name, status, time.Since(start).Milliseconds())
+func (s *Server) record(model, name, kind string, status int, start time.Time) {
+	_, _ = s.db.Exec(`INSERT INTO requests(created_at,model,channel,kind,status,duration_ms) VALUES(?,?,?,?,?,?)`, time.Now().UTC().Format(time.RFC3339), model, name, kind, status, time.Since(start).Milliseconds())
 }
 func requestCapabilities(v any) (tools, images bool) {
 	switch value := v.(type) {
@@ -521,14 +529,14 @@ func (s *Server) proxyModel(w http.ResponseWriter, r *http.Request, path string)
 		}
 		resp, e := s.client.Do(req)
 		if e != nil {
-			s.record(model, c.Name, 0, start)
+			s.record(model, c.Name, c.Kind, 0, start)
 			if r.Context().Err() != nil {
 				return
 			}
 			continue
 		}
 		if resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 429 || resp.StatusCode >= 500 {
-			s.record(model, c.Name, resp.StatusCode, start)
+			s.record(model, c.Name, c.Kind, resp.StatusCode, start)
 			io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 			resp.Body.Close()
 			continue
@@ -539,7 +547,7 @@ func (s *Server) proxyModel(w http.ResponseWriter, r *http.Request, path string)
 		copyErr := copyStream(w, resp.Body)
 		resp.Body.Close()
 		if copyErr != nil {
-			s.record(model, c.Name, 0, start)
+			s.record(model, c.Name, c.Kind, 0, start)
 			panic(http.ErrAbortHandler)
 		}
 		if session != "" && resp.StatusCode >= 200 && resp.StatusCode < 300 {
@@ -556,7 +564,7 @@ func (s *Server) proxyModel(w http.ResponseWriter, r *http.Request, path string)
 			}
 			s.mu.Unlock()
 		}
-		s.record(model, c.Name, resp.StatusCode, start)
+		s.record(model, c.Name, c.Kind, resp.StatusCode, start)
 		return
 	}
 	if attempted == 0 {
