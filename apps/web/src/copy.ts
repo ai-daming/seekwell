@@ -17,6 +17,7 @@ export const icons = {
   pause: '⏸️',
   play: '▶️',
   stats: '📈',
+  speed: '⚡',
 } as const;
 
 export const copy = {
@@ -35,4 +36,6 @@ export const copy = {
   searchCount: '每次搜索固定请求 5 条结果。',
   emptyChannels: '从一个来源开始',
   emptyActivity: '还没有调用记录',
+  speedTestConfirm: '该渠道为付费渠道，测速将发起一次真实调用并产生少量费用，继续？',
+  speedTestNotice: '总耗时包含建立连接、等待响应和读取完整响应体；上游返回错误状态时仍会展示测量结果。',
 } as const;

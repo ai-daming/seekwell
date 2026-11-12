@@ -1,4 +1,4 @@
-import type { Channel, Draft, Entry } from './types';
+import type { Channel, Draft, Entry, SpeedTestResult } from './types';
 
 export async function request<T>(path: string, opts?: RequestInit): Promise<T> {
   const response = await fetch(path, opts);
@@ -37,6 +37,8 @@ export const api = {
     request<void>(`/api/channels/${id}`, { method: 'DELETE' }),
   discoverModels: (id: number) =>
     request<{ models: string[] }>(`/api/channels/${id}/discover`, { method: 'POST' }),
+  speedTest: (id: number) =>
+    request<SpeedTestResult>(`/api/channels/${id}/speedtest`, { method: 'POST' }),
   search: (query: string) =>
     request<unknown>('/v1/tools/search', {
       method: 'POST',

@@ -26,6 +26,12 @@ export type Entry = {
   duration_ms: number;
 };
 
+export type SpeedTestResult = {
+  duration_ms: number;
+  status: number;
+  model: string;
+};
+
 export type Draft = Omit<Channel, 'id' | 'has_key'>;
 
 export type Tab = 'overview' | 'channels' | 'search' | 'activity';

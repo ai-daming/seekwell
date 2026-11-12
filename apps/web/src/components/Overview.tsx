@@ -10,9 +10,11 @@ type OverviewProps = {
   modelCount: number;
   loading: boolean;
   discovering: number | null;
+  speeding: number | null;
   onAdd: () => void;
   onManage: () => void;
   onDiscover: (channel: Channel) => void;
+  onSpeedTest: (channel: Channel) => void;
   onEdit: (channel: Channel) => void;
   onToggle: (channel: Channel) => void;
   onRemove: (channel: Channel) => void;
@@ -24,9 +26,11 @@ export function Overview({
   modelCount,
   loading,
   discovering,
+  speeding,
   onAdd,
   onManage,
   onDiscover,
+  onSpeedTest,
   onEdit,
   onToggle,
   onRemove,
@@ -90,8 +94,10 @@ export function Overview({
             channels={channels}
             compact
             discovering={discovering}
+            speeding={speeding}
             onAdd={onAdd}
             onDiscover={onDiscover}
+            onSpeedTest={onSpeedTest}
             onEdit={onEdit}
             onToggle={onToggle}
             onRemove={onRemove}

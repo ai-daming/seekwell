@@ -4,7 +4,7 @@ SeekWell 是一个 DeepSeek 专用的本地模型网关。当前开发版提供�
 
 ## 已实现
 
-- 在管理界面添加、编辑、启停和删除 DeepSeek 官方、OpenCode Go 或兼容 API 渠道；每个配置对应一个账号及一组模型映射。可以查询上游当前的 DeepSeek 模型目录。可按用户确认的工具调用、图片、Responses 和 Anthropic Messages 能力筛选渠道。
+- 在管理界面添加、编辑、启停和删除 DeepSeek 官方、OpenCode Go 或兼容 API 渠道；每个配置对应一个账号及一组模型映射。可以查询上游当前的 DeepSeek 模型目录，也可以按渠道发起一次最小真实补全测速，查看总耗时与上游状态码；付费渠道测速前需确认费用。可按用户确认的工具调用、图片、Responses 和 Anthropic Messages 能力筛选渠道。
 - 将同名统一 DeepSeek 模型按渠道优先级转发到上游；上游认证失败、限流、服务错误或连接失败时，在开始向客户端输出前尝试下一个渠道。
 - 转发 OpenAI Chat Completions 与 Responses；流式响应原样转发。上游是否支持对应协议及功能由用户确认。支持通过 `X-OpenCode-Session`、`X-SeekWell-Session-Id`、`X-Session-ID` 或 DSH 的 `X-DeepSeek-Harness-Session-Id` 保持进程内会话亲和；绑定一小时后过期，重启不保留。
 - 对支持该协议并已配置 Messages 地址的渠道原样转发 Anthropic Messages，不做跨协议转换。
