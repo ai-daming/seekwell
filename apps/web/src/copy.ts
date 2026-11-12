@@ -18,6 +18,7 @@ export const icons = {
   play: '▶️',
   stats: '📈',
   speed: '⚡',
+  test: '🧪',
 } as const;
 
 export const copy = {
@@ -38,4 +39,11 @@ export const copy = {
   emptyActivity: '还没有调用记录',
   speedTestConfirm: '该渠道为付费渠道，测速将发起一次真实调用并产生少量费用，继续？',
   speedTestNotice: '总耗时包含建立连接、等待响应和读取完整响应体；上游返回错误状态时仍会展示测量结果。',
+  modelTestConfirm: '该渠道为付费渠道，模型测试将发起一次真实调用并可能产生少量费用，继续？',
+  modelTestNotice: '测试会向所选渠道真实发送一次请求，且不会写入调用记录。协议是否可用以上游返回为准。',
+  modelTestMapped: '路由已映射',
+  modelTestUnmapped: '未加入路由配置，测通后仍需在渠道配置里添加映射才能给客户端用。',
+  modelTestCatalogFailed: '模型目录查询失败，仍可使用配置映射或手输模型。',
+  modelTestTruncated: '响应超过 1MB，已截断',
+  modelTestNotJSON: '非 JSON 响应',
 } as const;

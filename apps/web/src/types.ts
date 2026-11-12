@@ -33,9 +33,27 @@ export type SpeedTestResult = {
   model: string;
 };
 
+export type ModelTestProtocol = 'chat' | 'responses' | 'messages';
+
+export type ModelTestInput = {
+  protocol: ModelTestProtocol;
+  model: string;
+  prompt: string;
+};
+
+export type ModelTestResult = {
+  channel: string;
+  model: string;
+  protocol: ModelTestProtocol;
+  status: number;
+  duration_ms: number;
+  body: unknown;
+  truncated: boolean;
+};
+
 export type Draft = Omit<Channel, 'id' | 'has_key'>;
 
-export type Tab = 'overview' | 'channels' | 'search' | 'activity';
+export type Tab = 'overview' | 'channels' | 'test' | 'search' | 'activity';
 
 export const freshDraft = (): Draft => ({
   name: '',

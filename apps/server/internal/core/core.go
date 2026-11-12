@@ -45,6 +45,7 @@ type Server struct {
 	db           *sql.DB
 	client       *http.Client
 	speedTimeout time.Duration
+	testTimeout  time.Duration
 	mu           sync.Mutex
 	sessions     map[string]sessionBinding
 }
@@ -90,7 +91,7 @@ func New(path string) (*Server, error) {
 		return nil, err
 	}
 	_ = os.Chmod(path, 0600)
-	return &Server{db: db, client: &http.Client{Timeout: 5 * time.Minute}, speedTimeout: 30 * time.Second, sessions: make(map[string]sessionBinding)}, nil
+	return &Server{db: db, client: &http.Client{Timeout: 5 * time.Minute}, speedTimeout: 30 * time.Second, testTimeout: 60 * time.Second, sessions: make(map[string]sessionBinding)}, nil
 }
 func (s *Server) Close() error { return s.db.Close() }
 func validModel(v string) bool {
@@ -229,6 +230,7 @@ func (s *Server) Handler(webDir string) http.Handler {
 	m.HandleFunc("GET /api/requests", s.history)
 	m.HandleFunc("POST /api/channels/{id}/discover", s.discover)
 	m.HandleFunc("POST /api/channels/{id}/speedtest", s.speedtest)
+	m.HandleFunc("POST /api/channels/{id}/test", s.modelTest)
 	m.HandleFunc("GET /v1/models", func(w http.ResponseWriter, r *http.Request) {
 		cs, e := s.channels()
 		if e != nil {
@@ -374,6 +376,149 @@ func (s *Server) failSpeedtest(w http.ResponseWriter, ctx context.Context, start
 	}
 	fail(w, 502, fmt.Sprintf("无法连接渠道（已耗时 %dms）", elapsed))
 }
+func (s *Server) modelTest(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		fail(w, 400, "无效 ID")
+		return
+	}
+	var input struct {
+		Protocol string `json:"protocol"`
+		Model    string `json:"model"`
+		Prompt   string `json:"prompt"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&input); err != nil {
+		fail(w, 400, "无效的测试请求")
+		return
+	}
+	if strings.TrimSpace(input.Prompt) == "" {
+		fail(w, 400, "请输入测试提示词")
+		return
+	}
+	if len(input.Prompt) > 32<<10 {
+		fail(w, 400, "测试提示词不能超过 32KB")
+		return
+	}
+	if !validModel(input.Model) {
+		fail(w, 400, "测试模型名必须包含 deepseek 且不能包含空白")
+		return
+	}
+	if input.Protocol != "chat" && input.Protocol != "responses" && input.Protocol != "messages" {
+		fail(w, 400, "不支持的测试协议")
+		return
+	}
+	channels, err := s.channels()
+	if err != nil {
+		fail(w, 500, "读取渠道失败")
+		return
+	}
+	for _, c := range channels {
+		if c.ID != id {
+			continue
+		}
+		path := "/chat/completions"
+		baseURL := c.BaseURL
+		var payload []byte
+		switch input.Protocol {
+		case "responses":
+			path = "/responses"
+			payload, _ = json.Marshal(map[string]any{
+				"model":  input.Model,
+				"input":  input.Prompt,
+				"stream": false,
+			})
+		case "messages":
+			if c.MessagesBaseURL == "" {
+				fail(w, 400, "该渠道未配置 Messages API 地址，无法测试 messages 协议")
+				return
+			}
+			path = "/messages"
+			baseURL = c.MessagesBaseURL
+			payload, _ = json.Marshal(map[string]any{
+				"model":      input.Model,
+				"max_tokens": 512,
+				"messages":   []map[string]string{{"role": "user", "content": input.Prompt}},
+			})
+		default:
+			payload, _ = json.Marshal(map[string]any{
+				"model":    input.Model,
+				"messages": []map[string]string{{"role": "user", "content": input.Prompt}},
+				"stream":   false,
+			})
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), s.testTimeout)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+path, bytes.NewReader(payload))
+		if err != nil {
+			fail(w, 400, "无效渠道地址")
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+		if c.Kind == "opencode_go" {
+			var session [16]byte
+			if _, err := rand.Read(session[:]); err != nil {
+				fail(w, 500, "无法生成会话标识")
+				return
+			}
+			req.Header.Set("x-opencode-session", hex.EncodeToString(session[:]))
+			req.Header.Set("User-Agent", "SeekWell/0.1")
+		}
+		if input.Protocol == "messages" {
+			req.Header.Set("x-api-key", c.APIKey)
+			version := r.Header.Get("anthropic-version")
+			if version == "" {
+				version = "2023-06-01"
+			}
+			req.Header.Set("anthropic-version", version)
+			if beta := r.Header.Get("anthropic-beta"); beta != "" {
+				req.Header.Set("anthropic-beta", beta)
+			}
+		}
+		start := time.Now()
+		resp, err := s.client.Do(req)
+		if err != nil {
+			elapsed := time.Since(start).Milliseconds()
+			if ctx.Err() == context.DeadlineExceeded {
+				fail(w, 504, fmt.Sprintf("测试超时（>%dms，已耗时 %dms）", s.testTimeout.Milliseconds(), elapsed))
+				return
+			}
+			fail(w, 502, fmt.Sprintf("无法连接渠道（已耗时 %dms）", elapsed))
+			return
+		}
+		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
+		resp.Body.Close()
+		elapsed := time.Since(start).Milliseconds()
+		if readErr != nil {
+			if ctx.Err() == context.DeadlineExceeded {
+				fail(w, 504, fmt.Sprintf("测试超时（>%dms，已耗时 %dms）", s.testTimeout.Milliseconds(), elapsed))
+				return
+			}
+			fail(w, 502, fmt.Sprintf("读取渠道响应失败（已耗时 %dms）", elapsed))
+			return
+		}
+		truncated := len(raw) > 1<<20
+		if truncated {
+			raw = raw[:1<<20]
+		}
+		body := json.RawMessage(raw)
+		if !json.Valid(raw) {
+			body, _ = json.Marshal(string(raw))
+		}
+		jsonOut(w, 200, map[string]any{
+			"channel":     c.Name,
+			"model":       input.Model,
+			"protocol":    input.Protocol,
+			"status":      resp.StatusCode,
+			"duration_ms": elapsed,
+			"body":        body,
+			"truncated":   truncated,
+		})
+		return
+	}
+	fail(w, 404, "渠道不存在")
+}
+
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 	rows, e := s.db.Query(`SELECT created_at,model,channel,kind,status,duration_ms FROM requests ORDER BY id DESC LIMIT 100`)
 	if e != nil {

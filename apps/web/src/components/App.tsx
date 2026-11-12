@@ -5,12 +5,13 @@ import '../base.css';
 import './App.css';
 import { api, request } from '../api';
 import { copy } from '../copy';
-import { freshDraft, type Channel, type Draft, type Entry, type SpeedTestResult, type Tab } from '../types';
+import { freshDraft, type Channel, type Draft, type Entry, type ModelTestProtocol, type ModelTestResult, type SpeedTestResult, type Tab } from '../types';
 import { ActivityTable } from './ActivityTable';
 import { ChannelDialog } from './ChannelDialog';
 import { ChannelsTable } from './ChannelsTable';
 import { Icon } from './Icon';
 import { ModelsDialog } from './ModelsDialog';
+import { ModelTestPanel } from './ModelTestPanel';
 import { Overview } from './Overview';
 import { SearchPanel } from './SearchPanel';
 import { Shell } from './Shell';
@@ -33,6 +34,15 @@ export default function App() {
   const [discovering, setDiscovering] = useState<number | null>(null);
   const [speedResult, setSpeedResult] = useState<{ name: string; result: SpeedTestResult } | null>(null);
   const [speeding, setSpeeding] = useState<number | null>(null);
+  const [testChannelId, setTestChannelId] = useState<number | null>(null);
+  const [testModel, setTestModel] = useState('');
+  const [testProtocol, setTestProtocol] = useState<ModelTestProtocol>('chat');
+  const [testPrompt, setTestPrompt] = useState('');
+  const [testSending, setTestSending] = useState(false);
+  const [testResult, setTestResult] = useState<ModelTestResult | null>(null);
+  const [testCatalog, setTestCatalog] = useState<Record<number, string[]>>({});
+  const [testDiscovering, setTestDiscovering] = useState<number | null>(null);
+  const [testCatalogError, setTestCatalogError] = useState('');
 
   async function refresh(silent = false) {
     if (!silent) setLoading(true);
@@ -54,6 +64,7 @@ export default function App() {
 
   const enabled = channels.filter((channel) => channel.enabled);
   const models = [...new Set(enabled.map((channel) => channel.model))];
+  const testChannel = channels.find((channel) => channel.id === testChannelId) ?? null;
 
   function add() {
     setEditing(null);
@@ -141,6 +152,53 @@ export default function App() {
       setError(caught instanceof Error ? caught.message : '测速失败');
     } finally {
       setSpeeding(null);
+    }
+  }
+
+  async function loadTestCatalog(channel: Channel) {
+    setTestDiscovering(channel.id);
+    setTestCatalogError('');
+    try {
+      const data = await api.discoverModels(channel.id);
+      setTestCatalog((current) => ({ ...current, [channel.id]: data.models }));
+    } catch (caught) {
+      setTestCatalogError(caught instanceof Error ? caught.message : '查询失败');
+    } finally {
+      setTestDiscovering(null);
+    }
+  }
+
+  function selectTestChannel(id: number) {
+    const channel = channels.find((item) => item.id === id) ?? null;
+    setTestChannelId(channel?.id ?? null);
+    setTestModel(channel?.remote_model ?? '');
+    setTestCatalogError('');
+    if (channel && testCatalog[channel.id] === undefined && testDiscovering !== channel.id) {
+      void loadTestCatalog(channel);
+    }
+  }
+
+  async function sendTest(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const channel = channels.find((item) => item.id === testChannelId);
+    if (!channel) {
+      setError('请先选择渠道');
+      return;
+    }
+    if (channel.paid && !window.confirm(`${copy.modelTestConfirm}「${channel.name}」`)) return;
+    setTestSending(true);
+    setError('');
+    try {
+      const result = await api.testModel(channel.id, {
+        protocol: testProtocol,
+        model: testModel,
+        prompt: testPrompt,
+      });
+      setTestResult(result);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '测试失败');
+    } finally {
+      setTestSending(false);
     }
   }
 
@@ -246,6 +304,35 @@ export default function App() {
                 />
               )}
             </section>
+          </>
+        )}
+
+        {tab === 'test' && (
+          <>
+            <div className="page-head">
+              <div>
+                <div className="eyebrow">MODEL TEST</div>
+                <h1>模型测试</h1>
+                <p>选择渠道、模型与协议，发送一条真实提示词并查看上游原始回复。</p>
+              </div>
+            </div>
+            <ModelTestPanel
+              channels={channels}
+              channel={testChannel}
+              model={testModel}
+              protocol={testProtocol}
+              prompt={testPrompt}
+              sending={testSending}
+              result={testResult}
+              catalog={testChannel ? testCatalog[testChannel.id] ?? [] : []}
+              discovering={testChannel !== null && testDiscovering === testChannel.id}
+              catalogError={testCatalogError}
+              onChannelChange={selectTestChannel}
+              onModelChange={setTestModel}
+              onProtocolChange={setTestProtocol}
+              onPromptChange={setTestPrompt}
+              onSubmit={(event) => void sendTest(event)}
+            />
           </>
         )}
 
