@@ -65,6 +65,7 @@ export function ChannelDialog({
             <select value={draft.kind} onChange={(event) => onKindChange(event.target.value)}>
               <option value="deepseek">DeepSeek 官方（支持 Search / Fetch）</option>
               <option value="opencode_go">OpenCode Go</option>
+              <option value="dimagent">DimAgent</option>
               <option value="compatible">OpenAI 兼容 API / 已有网关</option>
             </select>
             <small>{copy.typeChangeReset}</small>

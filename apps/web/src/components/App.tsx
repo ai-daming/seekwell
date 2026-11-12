@@ -87,6 +87,7 @@ export default function App() {
   function changeKind(kind: string) {
     const official = kind === 'deepseek';
     const openCodeGo = kind === 'opencode_go';
+    const dimAgent = kind === 'dimagent';
     setDraft((current) => ({
       ...current,
       kind,
@@ -94,9 +95,11 @@ export default function App() {
         ? 'https://api.deepseek.com/v1'
         : openCodeGo
           ? 'https://opencode.ai/inference/go/v1'
-          : current.base_url,
-      remote_model: openCodeGo ? 'deepseek-v4.1-flash' : 'deepseek-flash',
-      supports_tools: official || openCodeGo,
+          : dimAgent
+            ? 'https://dimagent.cn/v1'
+            : current.base_url,
+      remote_model: openCodeGo || dimAgent ? 'deepseek-v4.1-flash' : 'deepseek-flash',
+      supports_tools: official || openCodeGo || dimAgent,
       supports_images: official,
       supports_responses: official,
       supports_messages: official,
