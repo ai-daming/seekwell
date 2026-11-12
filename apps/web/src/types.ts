@@ -53,7 +53,7 @@ export type ModelTestResult = {
 
 export type Draft = Omit<Channel, 'id' | 'has_key'>;
 
-export type Tab = 'overview' | 'channels' | 'test' | 'search' | 'activity';
+export type Tab = 'overview' | 'channels' | 'test' | 'search' | 'activity' | 'keys';
 
 export const freshDraft = (): Draft => ({
   name: '',
@@ -80,3 +80,5 @@ export const kindLabel = (kind: string): string => {
   if (kind === 'compatible') return '兼容 API / 网关';
   return '未知';
 };
+
+export type AccessKey = {id:number;name:string;prefix:string;enabled:boolean;request_count:number;success_count:number;failure_count:number;usage_known_count:number;input_tokens:number|null;output_tokens:number|null};

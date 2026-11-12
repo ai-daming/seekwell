@@ -90,6 +90,11 @@ func New(path string) (*Server, error) {
 		db.Close()
 		return nil, err
 	}
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS access_keys (id INTEGER PRIMARY KEY, name TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, prefix TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS access_requests (id INTEGER PRIMARY KEY, key_id INTEGER NOT NULL, created_at TEXT NOT NULL, path TEXT NOT NULL, status INTEGER NOT NULL, duration_ms INTEGER NOT NULL, input_tokens INTEGER, output_tokens INTEGER);`)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
 	_ = os.Chmod(path, 0600)
 	return &Server{db: db, client: &http.Client{Timeout: 5 * time.Minute}, speedTimeout: 30 * time.Second, testTimeout: 60 * time.Second, sessions: make(map[string]sessionBinding)}, nil
 }
@@ -228,6 +233,10 @@ func (s *Server) Handler(webDir string) http.Handler {
 		w.WriteHeader(204)
 	})
 	m.HandleFunc("GET /api/requests", s.history)
+	m.HandleFunc("GET /api/keys", s.listKeys)
+	m.HandleFunc("POST /api/keys", s.createKey)
+	m.HandleFunc("PATCH /api/keys/{id}", s.updateKey)
+	m.HandleFunc("POST /api/tools/search", func(w http.ResponseWriter, r *http.Request) { s.proxyTool(w, r, "/tools/search") })
 	m.HandleFunc("POST /api/channels/{id}/discover", s.discover)
 	m.HandleFunc("POST /api/channels/{id}/speedtest", s.speedtest)
 	m.HandleFunc("POST /api/channels/{id}/test", s.modelTest)
@@ -256,7 +265,7 @@ func (s *Server) Handler(webDir string) http.Handler {
 	if webDir != "" {
 		m.Handle("/", http.FileServer(http.Dir(webDir)))
 	}
-	return m
+	return s.authenticateAPI(m)
 }
 func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)

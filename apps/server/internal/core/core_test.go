@@ -22,7 +22,17 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.Close() })
-	h := httptest.NewServer(s.Handler(""))
+	key, err := s.newAccessKey("existing tests")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := s.Handler("")
+	h := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1/") && r.Header.Get("Authorization") == "" {
+			r.Header.Set("Authorization", "Bearer "+key.Key)
+		}
+		handler.ServeHTTP(w, r)
+	}))
 	t.Cleanup(h.Close)
 	return s, h
 }
@@ -775,7 +785,13 @@ CREATE TABLE requests (id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, model T
 	if len(got) != 1 || got[0].Channel != "legacy" || got[0].Kind != "" || got[0].Status != 429 {
 		t.Fatalf("legacy history not preserved: %+v", got)
 	}
-	resp, err := http.Post(h.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"deepseek-flash","messages":[]}`))
+	key, err := s.newAccessKey("migration test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest("POST", h.URL+"/v1/chat/completions", strings.NewReader(`{"model":"deepseek-flash","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer "+key.Key)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}

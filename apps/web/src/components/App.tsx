@@ -5,7 +5,7 @@ import '../base.css';
 import './App.css';
 import { api, request } from '../api';
 import { copy } from '../copy';
-import { freshDraft, type Channel, type Draft, type Entry, type ModelTestProtocol, type ModelTestResult, type SpeedTestResult, type Tab } from '../types';
+import { freshDraft, type Channel, type Draft, type Entry, type AccessKey, type ModelTestProtocol, type ModelTestResult, type SpeedTestResult, type Tab } from '../types';
 import { ActivityTable } from './ActivityTable';
 import { ChannelDialog } from './ChannelDialog';
 import { ChannelsTable } from './ChannelsTable';
@@ -18,6 +18,9 @@ import { Shell } from './Shell';
 import { SpeedDialog } from './SpeedDialog';
 
 export default function App() {
+  const [keys, setKeys] = useState<AccessKey[]>([]);
+  const [keyName, setKeyName] = useState('');
+  const [createdKey, setCreatedKey] = useState('');
   const [channels, setChannels] = useState<Channel[]>([]);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [tab, setTab] = useState<Tab>('overview');
@@ -47,7 +50,8 @@ export default function App() {
   async function refresh(silent = false) {
     if (!silent) setLoading(true);
     try {
-      const [nextChannels, nextEntries] = await Promise.all([api.channels(), api.requests()]);
+      const [nextChannels, nextEntries, nextKeys] = await Promise.all([api.channels(), api.requests(), request<AccessKey[]>('/api/keys')]);
+      setKeys(nextKeys);
       setChannels(nextChannels);
       setEntries(nextEntries);
       setError('');
@@ -228,6 +232,11 @@ export default function App() {
     }
   }
 
+  async function createKey(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); try { const result = await request<{key:string}>('/api/keys', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:keyName})}); setCreatedKey(result.key); setKeyName(''); await refresh(true); } catch (caught) { setError(caught instanceof Error ? caught.message : '创建失败'); }
+  }
+  async function toggleKey(key:AccessKey) { try { await request(`/api/keys/${key.id}`, {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!key.enabled})}); await refresh(true); } catch (caught) { setError(caught instanceof Error ? caught.message : '更新失败'); } }
+
   async function runSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSearching(true);
@@ -309,6 +318,8 @@ export default function App() {
             </section>
           </>
         )}
+
+        {tab === 'keys' && <><div className="page-head"><div><h1>访问 Key</h1><p>每位使用者独立创建，Token 仅统计上游返回的用量。</p></div></div><section><form onSubmit={(e)=>void createKey(e)}><label>使用者或用途 <input required value={keyName} onChange={e=>setKeyName(e.target.value)} /></label> <button className="button button--primary">创建 Key</button></form>{createdKey && <div><p>完整 Key 只显示一次，请立即复制保存：</p><code>{createdKey}</code> <button className="button button--ghost" onClick={()=>void navigator.clipboard.writeText(createdKey)}>复制</button> <button className="button button--ghost" onClick={()=>setCreatedKey('')}>关闭</button></div>}<div className="table-wrap"><table><thead><tr><th>名称</th><th>状态</th><th>请求</th><th>成功 / 失败</th><th>输入 / 输出 Token</th><th>用量已返回</th><th></th></tr></thead><tbody>{keys.map(k=><tr key={k.id}><td>{k.name}<br/>{k.prefix}…</td><td>{k.enabled?'已启用':'已停用'}</td><td>{k.request_count}</td><td>{k.success_count} / {k.failure_count}</td><td>{k.input_tokens ?? '未知'} / {k.output_tokens ?? '未知'}</td><td>{k.usage_known_count} / {k.request_count}</td><td><button className="button button--ghost" onClick={()=>void toggleKey(k)}>{k.enabled?'停用':'启用'}</button></td></tr>)}</tbody></table></div></section></>}
 
         {tab === 'test' && (
           <>

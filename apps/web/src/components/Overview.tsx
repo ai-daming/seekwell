@@ -113,11 +113,11 @@ export function Overview({
           <strong>统一 API 入口</strong>
           <p>配置渠道后，将客户端连接到本机地址。</p>
         </div>
-        <code>http://127.0.0.1:8350/v1</code>
+        <code>{window.location.origin}/v1</code>
         <button
           type="button"
           className="button button--ghost"
-          onClick={() => void navigator.clipboard.writeText('http://127.0.0.1:8350/v1')}
+          onClick={() => void navigator.clipboard.writeText(`${window.location.origin}/v1`)}
         >
           <Icon name="copy" /> 复制
         </button>

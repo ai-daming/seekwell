@@ -46,7 +46,7 @@ export const api = {
       body: JSON.stringify(input),
     }),
   search: (query: string) =>
-    request<unknown>('/v1/tools/search', {
+    request<unknown>('/api/tools/search', {
       method: 'POST',
       headers: jsonHeaders,
       body: JSON.stringify({ query, count: 5 }),

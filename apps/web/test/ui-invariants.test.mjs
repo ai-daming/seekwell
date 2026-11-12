@@ -76,7 +76,7 @@ test('T2 图标位使用 Emoji 12.1 内的彩色 emoji', () => {
   }
 });
 
-test('T3 外部接口集合恰好为七条', () => {
+test('T3 管理界面接口集合', () => {
   const paths = new Set();
   for (const match of allSource.matchAll(/['"`](\/(?:api|v1)\/[^'"`]*)['"`]/g)) {
     paths.add(match[1].replace(/\$\{[^}]+\}/g, '${id}'));
@@ -87,8 +87,10 @@ test('T3 外部接口集合恰好为七条', () => {
     '/api/channels/${id}/discover',
     '/api/channels/${id}/speedtest',
     '/api/channels/${id}/test',
+    '/api/keys',
+    '/api/keys/${id}',
     '/api/requests',
-    '/v1/tools/search',
+    '/api/tools/search',
   ].sort());
 });
 
