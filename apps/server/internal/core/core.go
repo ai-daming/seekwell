@@ -112,7 +112,7 @@ func (s *Server) SaveChannel(c *Channel) error {
 	if c.Kind == "" {
 		c.Kind = "compatible"
 	}
-	if c.Kind != "compatible" && c.Kind != "deepseek" && c.Kind != "opencode_go" {
+	if c.Kind != "compatible" && c.Kind != "deepseek" && c.Kind != "opencode_go" && c.Kind != "dimagent" {
 		return errors.New("不支持的渠道类型")
 	}
 	c.MessagesBaseURL = strings.TrimRight(strings.TrimSpace(c.MessagesBaseURL), "/")

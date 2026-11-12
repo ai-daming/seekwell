@@ -1334,3 +1334,355 @@ func TestModelTestConcurrentRequests(t *testing.T) {
 		}
 	}
 }
+
+func postJSON(t *testing.T, url, body string) (int, []byte) {
+	t.Helper()
+	resp, err := http.Post(url, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode, b
+}
+
+func dimAgentDraft(name, baseURL, kind string) Channel {
+	return Channel{Name: name, BaseURL: baseURL, APIKey: "secret-key", Model: "deepseek-flash", RemoteModel: "deepseek-v4.1-flash", Enabled: true, Paid: true, Kind: kind}
+}
+
+func TestDimAgentKindRoundTripAndBoundaries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dimagent.db")
+	s, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := dimAgentDraft("DimAgent", "https://dimagent.cn/v1", "dimagent")
+	if err = s.SaveChannel(&c); err != nil {
+		t.Fatal(err)
+	}
+	if c.ID <= 0 {
+		t.Fatalf("channel was not persisted: %+v", c)
+	}
+	h := httptest.NewServer(s.Handler(""))
+	resp, err := http.Get(h.URL + "/api/channels")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || bytes.Contains(raw, []byte("secret-key")) || bytes.Contains(raw, []byte(`"api_key"`)) {
+		t.Fatalf("unexpected channels response %d: %s", resp.StatusCode, raw)
+	}
+	var listed []Channel
+	if err = json.Unmarshal(raw, &listed); err != nil || len(listed) != 1 {
+		t.Fatalf("invalid channels response %q: %v", raw, err)
+	}
+	if listed[0].Kind != "dimagent" || !listed[0].HasKey || listed[0].APIKey != "" {
+		t.Fatalf("dimagent kind did not round-trip: %+v", listed[0])
+	}
+	h.Close()
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	persisted, err := s.channels()
+	if err != nil || len(persisted) != 1 || persisted[0].Kind != "dimagent" {
+		t.Fatalf("dimagent kind did not survive restart: %+v %v", persisted, err)
+	}
+
+	h = httptest.NewServer(s.Handler(""))
+	defer h.Close()
+	created, err := http.Post(h.URL+"/api/channels", "application/json", strings.NewReader(`{"name":"api-created","base_url":"https://dimagent.cn/v1","api_key":"api-key","model":"deepseek-flash","remote_model":"deepseek-v4.1-flash","enabled":true,"paid":true,"kind":"dimagent"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	createdBody, _ := io.ReadAll(created.Body)
+	created.Body.Close()
+	if created.StatusCode != 201 || !bytes.Contains(createdBody, []byte(`"kind":"dimagent"`)) {
+		t.Fatalf("POST /api/channels rejected dimagent: %d %s", created.StatusCode, createdBody)
+	}
+	c.APIKey = ""
+	updateBody, _ := json.Marshal(c)
+	updateReq, _ := http.NewRequest(http.MethodPut, h.URL+"/api/channels/"+strconv.FormatInt(c.ID, 10), bytes.NewReader(updateBody))
+	updateReq.Header.Set("Content-Type", "application/json")
+	updated, err := http.DefaultClient.Do(updateReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updatedBody, _ := io.ReadAll(updated.Body)
+	updated.Body.Close()
+	if updated.StatusCode != 200 || !bytes.Contains(updatedBody, []byte(`"kind":"dimagent"`)) {
+		t.Fatalf("PUT /api/channels rejected dimagent: %d %s", updated.StatusCode, updatedBody)
+	}
+
+	empty := dimAgentDraft("empty-kind", "https://dimagent.cn/v1", "")
+	if err = s.SaveChannel(&empty); err != nil || empty.Kind != "compatible" {
+		t.Fatalf("empty kind should default to compatible: %+v %v", empty, err)
+	}
+	for _, kind := range []string{"DimAgent", "gemini", " dimagent", "dimagent "} {
+		rejected := dimAgentDraft("rejected-"+kind, "https://dimagent.cn/v1", kind)
+		err = s.SaveChannel(&rejected)
+		if err == nil || !strings.Contains(err.Error(), "不支持的渠道类型") {
+			t.Errorf("kind %q should be rejected, got %v", kind, err)
+		}
+	}
+}
+
+func TestDimAgentKindWhitelistRegression(t *testing.T) {
+	s, _ := newTestServer(t)
+	for _, kind := range []string{"compatible_plus", "d imagent"} {
+		c := dimAgentDraft("rejected-"+kind, "https://dimagent.cn/v1", kind)
+		if err := s.SaveChannel(&c); err == nil || !strings.Contains(err.Error(), "不支持的渠道类型") {
+			t.Errorf("kind %q should be rejected, got %v", kind, err)
+		}
+	}
+	for _, kind := range []string{"deepseek", "opencode_go", "compatible"} {
+		c := dimAgentDraft("accepted-"+kind, "https://dimagent.cn/v1", kind)
+		if err := s.SaveChannel(&c); err != nil {
+			t.Errorf("kind %q should still be accepted: %v", kind, err)
+		}
+	}
+}
+
+func TestDimAgentCapabilityGates(t *testing.T) {
+	var hits int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"ok":true}`)
+	}))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	c := saveTestChannel(t, s, dimAgentDraft("DimAgent", upstream.URL+"/v1", "dimagent"))
+	save := func() {
+		t.Helper()
+		c.APIKey = ""
+		if err := s.SaveChannel(&c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	chatWithTools := `{"model":"deepseek-flash","messages":[],"tools":[{"type":"function","function":{"name":"x"}}]}`
+	chatWithImage := `{"model":"deepseek-flash","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AA"}}]}]}`
+	c.AutoPaid = true
+	save()
+	if status, body := postJSON(t, h.URL+"/v1/chat/completions", chatWithTools); status != 503 || hits != 0 {
+		t.Fatalf("tools without capability: %d %s hits=%d", status, body, hits)
+	}
+	c.SupportsTools = true
+	save()
+	if status, body := postJSON(t, h.URL+"/v1/chat/completions", chatWithTools); status != 200 || hits != 1 {
+		t.Fatalf("tools with capability: %d %s hits=%d", status, body, hits)
+	}
+	if status, body := postJSON(t, h.URL+"/v1/responses", `{"model":"deepseek-flash","input":"hi"}`); status != 503 || hits != 1 {
+		t.Fatalf("responses without capability: %d %s hits=%d", status, body, hits)
+	}
+	c.SupportsResponses = true
+	save()
+	if status, body := postJSON(t, h.URL+"/v1/responses", `{"model":"deepseek-flash","input":"hi"}`); status != 200 || hits != 2 {
+		t.Fatalf("responses with capability: %d %s hits=%d", status, body, hits)
+	}
+	if status, body := postJSON(t, h.URL+"/v1/messages", `{"model":"deepseek-flash","max_tokens":1,"messages":[]}`); status != 503 || hits != 2 {
+		t.Fatalf("messages without capability: %d %s hits=%d", status, body, hits)
+	}
+	c.SupportsMessages = true
+	c.MessagesBaseURL = upstream.URL + "/v1"
+	save()
+	if status, body := postJSON(t, h.URL+"/v1/messages", `{"model":"deepseek-flash","max_tokens":1,"messages":[]}`); status != 200 || hits != 3 {
+		t.Fatalf("messages with capability: %d %s hits=%d", status, body, hits)
+	}
+	if status, body := postJSON(t, h.URL+"/v1/chat/completions", chatWithImage); status != 503 || hits != 3 {
+		t.Fatalf("images without capability: %d %s hits=%d", status, body, hits)
+	}
+	c.SupportsImages = true
+	save()
+	if status, body := postJSON(t, h.URL+"/v1/chat/completions", chatWithImage); status != 200 || hits != 4 {
+		t.Fatalf("images with capability: %d %s hits=%d", status, body, hits)
+	}
+
+	missingMessagesURL := dimAgentDraft("no-messages-url", upstream.URL+"/v1", "dimagent")
+	missingMessagesURL.SupportsMessages = true
+	if err := s.SaveChannel(&missingMessagesURL); err == nil || !strings.Contains(err.Error(), "Messages") {
+		t.Fatalf("messages without address should be rejected: %v", err)
+	}
+	stored, err := s.channels()
+	if err != nil || len(stored) != 1 {
+		t.Fatalf("rejected channel was persisted: %+v %v", stored, err)
+	}
+}
+
+func TestDimAgentPaidGate(t *testing.T) {
+	var hits int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		io.WriteString(w, `{"ok":true}`)
+	}))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	c := saveTestChannel(t, s, dimAgentDraft("DimAgent", upstream.URL+"/v1", "dimagent"))
+	save := func() {
+		t.Helper()
+		c.APIKey = ""
+		if err := s.SaveChannel(&c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	body := `{"model":"deepseek-flash","messages":[]}`
+	if status, resp := postJSON(t, h.URL+"/v1/chat/completions", body); status != 503 || hits != 0 {
+		t.Fatalf("paid channel auto-used without opt-in: %d %s hits=%d", status, resp, hits)
+	}
+	c.AutoPaid = true
+	save()
+	if status, resp := postJSON(t, h.URL+"/v1/chat/completions", body); status != 200 || hits != 1 {
+		t.Fatalf("paid channel not used after opt-in: %d %s hits=%d", status, resp, hits)
+	}
+	c.Enabled = false
+	save()
+	if status, resp := postJSON(t, h.URL+"/v1/chat/completions", body); status != 503 || hits != 1 {
+		t.Fatalf("disabled channel was used: %d %s hits=%d", status, resp, hits)
+	}
+	c.Enabled = true
+	c.Paid = false
+	c.AutoPaid = false
+	save()
+	if status, resp := postJSON(t, h.URL+"/v1/chat/completions", body); status != 200 || hits != 2 {
+		t.Fatalf("free channel required auto_paid: %d %s hits=%d", status, resp, hits)
+	}
+}
+
+func TestDimAgentModelMappingAndHistory(t *testing.T) {
+	var gotModel, gotAuth, gotContentType string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotContentType = r.Header.Get("Content-Type")
+		var payload struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		gotModel = payload.Model
+		io.WriteString(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+	}))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	c := saveTestChannel(t, s, dimAgentDraft("DimAgent 主账号", upstream.URL+"/v1", "dimagent"))
+	c.AutoPaid = true
+	c.APIKey = ""
+	if err := s.SaveChannel(&c); err != nil {
+		t.Fatal(err)
+	}
+	status, body := postJSON(t, h.URL+"/v1/chat/completions", `{"model":"deepseek-flash","messages":[{"role":"user","content":"hi"}]}`)
+	if status != 200 || !bytes.Contains(body, []byte(`"content":"ok"`)) {
+		t.Fatalf("unexpected response %d: %s", status, body)
+	}
+	if gotModel != "deepseek-v4.1-flash" || gotAuth != "Bearer secret-key" || gotContentType != "application/json" {
+		t.Fatalf("unexpected upstream request model=%q auth=%q content-type=%q", gotModel, gotAuth, gotContentType)
+	}
+	entries := historyEntries(t, h)
+	if len(entries) != 1 || entries[0].Channel != "DimAgent 主账号" || entries[0].Kind != "dimagent" || entries[0].Status != 200 || entries[0].DurationMS < 0 {
+		t.Fatalf("unexpected history entry: %+v", entries)
+	}
+
+	slashed := dimAgentDraft("slash-mapping", upstream.URL+"/v1", "dimagent")
+	slashed.Model = "deepseek-pro"
+	slashed.RemoteModel = "deepseek/deepseek-v4.1-flash"
+	slashed.AutoPaid = true
+	saveTestChannel(t, s, slashed)
+	if status, body := postJSON(t, h.URL+"/v1/chat/completions", `{"model":"deepseek-pro","messages":[]}`); status != 200 {
+		t.Fatalf("slashed remote model was rejected: %d %s", status, body)
+	}
+	if gotModel != "deepseek/deepseek-v4.1-flash" {
+		t.Fatalf("slashed remote model was not forwarded verbatim: %q", gotModel)
+	}
+}
+
+func TestDimAgentDiscover(t *testing.T) {
+	var gotAuth, gotSession, gotUserAgent string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		gotAuth = r.Header.Get("Authorization")
+		gotSession = r.Header.Get("x-opencode-session")
+		gotUserAgent = r.Header.Get("User-Agent")
+		io.WriteString(w, `{"data":[{"id":"deepseek-v4.1-flash"},{"id":"glm-5.3-flash"},{"id":"deepseek v4"},{"id":"deepseek-v4-pro"}]}`)
+	}))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	c := saveTestChannel(t, s, dimAgentDraft("DimAgent", upstream.URL+"/v1", "dimagent"))
+	status, body := postJSON(t, h.URL+"/api/channels/"+strconv.FormatInt(c.ID, 10)+"/discover", `{}`)
+	if status != 200 {
+		t.Fatalf("discover failed %d: %s", status, body)
+	}
+	var catalog struct {
+		Models []string `json:"models"`
+	}
+	if err := json.Unmarshal(body, &catalog); err != nil {
+		t.Fatalf("invalid discover response %s: %v", body, err)
+	}
+	if strings.Join(catalog.Models, ",") != "deepseek-v4.1-flash,deepseek-v4-pro" {
+		t.Fatalf("unexpected models: %+v", catalog.Models)
+	}
+	if gotAuth != "Bearer secret-key" {
+		t.Fatalf("missing bearer token: %q", gotAuth)
+	}
+	if gotSession != "" || gotUserAgent == "SeekWell/0.1" {
+		t.Fatalf("dimagent inherited opencode headers: session=%q user-agent=%q", gotSession, gotUserAgent)
+	}
+	if bytes.Contains(body, []byte("secret-key")) {
+		t.Fatalf("discover response leaked the api key: %s", body)
+	}
+
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		io.WriteString(w, `{"error":{"message":"未提供令牌"}}`)
+	}))
+	defer failing.Close()
+	failingChannel := saveTestChannel(t, s, dimAgentDraft("failing", failing.URL+"/v1", "dimagent"))
+	status, body = postJSON(t, h.URL+"/api/channels/"+strconv.FormatInt(failingChannel.ID, 10)+"/discover", `{}`)
+	if status != 502 || !strings.Contains(errorMessage(t, body), "上游状态码 401") {
+		t.Fatalf("unexpected upstream failure %d: %s", status, body)
+	}
+	if status, body = postJSON(t, h.URL+"/api/channels/999/discover", `{}`); status != 404 {
+		t.Fatalf("missing channel discover returned %d: %s", status, body)
+	}
+}
+
+func TestDimAgentDoesNotServeSearch(t *testing.T) {
+	var dimAgentHits, deepseekHits int
+	dimAgentUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dimAgentHits++
+		io.WriteString(w, `{"results":[]}`)
+	}))
+	defer dimAgentUpstream.Close()
+	deepseekUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		deepseekHits++
+		if r.URL.Path != "/v1/tools/search" || r.Header.Get("Authorization") != "Bearer deepseek-key" {
+			t.Errorf("unexpected deepseek request %s", r.URL.Path)
+		}
+		io.WriteString(w, `{"results":[{"title":"result"}]}`)
+	}))
+	defer deepseekUpstream.Close()
+	s, h := newTestServer(t)
+	dimAgent := dimAgentDraft("DimAgent", dimAgentUpstream.URL+"/v1", "dimagent")
+	dimAgent.AutoPaid = true
+	saveTestChannel(t, s, dimAgent)
+	for _, path := range []string{"/v1/tools/search", "/v1/tools/fetch"} {
+		if status, body := postJSON(t, h.URL+path, `{"query":"DeepSeek"}`); status != 503 {
+			t.Fatalf("%s used a dimagent channel: %d %s", path, status, body)
+		}
+	}
+	if dimAgentHits != 0 {
+		t.Fatalf("dimagent upstream received %d tool requests", dimAgentHits)
+	}
+	deepseek := Channel{Name: "official", BaseURL: deepseekUpstream.URL + "/v1", APIKey: "deepseek-key", Model: "deepseek-flash", RemoteModel: "deepseek-flash", Enabled: true, Kind: "deepseek", Paid: true, AutoPaid: true, Priority: 1}
+	saveTestChannel(t, s, deepseek)
+	if status, body := postJSON(t, h.URL+"/v1/tools/search", `{"query":"DeepSeek"}`); status != 200 || deepseekHits != 1 || !bytes.Contains(body, []byte("result")) {
+		t.Fatalf("deepseek search regression: %d %s hits=%d", status, body, deepseekHits)
+	}
+}
