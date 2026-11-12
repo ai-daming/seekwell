@@ -6,6 +6,7 @@ import { Icon, type IconName } from './Icon';
 const NAV: ReadonlyArray<{ id: Tab; icon: IconName; label: string }> = [
   { id: 'overview', icon: 'overview', label: '总览' },
   { id: 'channels', icon: 'channels', label: '渠道管理' },
+  { id: 'test', icon: 'test', label: '模型测试' },
   { id: 'search', icon: 'search', label: '搜索测试' },
   { id: 'activity', icon: 'activity', label: '调用记录' },
 ];

@@ -902,3 +902,435 @@ func TestRequestHistoryShapeAndLimit(t *testing.T) {
 		t.Fatalf("history is not newest-first or limited to 100: %+v", got[99])
 	}
 }
+
+type modelTestResponse struct {
+	Channel    string          `json:"channel"`
+	Model      string          `json:"model"`
+	Protocol   string          `json:"protocol"`
+	Status     int             `json:"status"`
+	DurationMS int             `json:"duration_ms"`
+	Body       json.RawMessage `json:"body"`
+	Truncated  bool            `json:"truncated"`
+}
+
+func runModelTest(t *testing.T, h *httptest.Server, id int64, payload string) (*http.Response, []byte) {
+	t.Helper()
+	return runModelTestWithHeaders(t, h, id, payload, nil)
+}
+
+func runModelTestWithHeaders(t *testing.T, h *httptest.Server, id int64, payload string, headers map[string]string) (*http.Response, []byte) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, h.URL+"/api/channels/"+strconv.FormatInt(id, 10)+"/test", strings.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp, b
+}
+
+func decodeModelTestResponse(t *testing.T, b []byte) modelTestResponse {
+	t.Helper()
+	var out modelTestResponse
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("invalid model test response %q: %v", b, err)
+	}
+	return out
+}
+
+func TestModelTestChatSuccess(t *testing.T) {
+	var gotPath, gotAuth, gotContentType string
+	var gotBody map[string]any
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		gotContentType = r.Header.Get("Content-Type")
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("invalid upstream body: %v", err)
+		}
+		io.WriteString(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+	}))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	c := saveTestChannel(t, s, Channel{Name: "official", BaseURL: upstream.URL + "/v1", APIKey: "secret", Model: "deepseek-flash", RemoteModel: "deepseek-flash", Enabled: true})
+	resp, b := runModelTest(t, h, c.ID, `{"protocol":"chat","model":"deepseek-flash","prompt":"你好"}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d: %s", resp.StatusCode, b)
+	}
+	got := decodeModelTestResponse(t, b)
+	if got.Status != 200 || got.DurationMS < 0 || got.Channel != c.Name || got.Model != "deepseek-flash" || got.Protocol != "chat" || got.Truncated {
+		t.Fatalf("unexpected model test result: %+v", got)
+	}
+	if !bytes.Contains(got.Body, []byte(`"choices"`)) || !bytes.Contains(got.Body, []byte(`"content":"ok"`)) {
+		t.Fatalf("body was not passed through: %s", got.Body)
+	}
+	if gotPath != "/v1/chat/completions" || gotAuth != "Bearer secret" || gotContentType != "application/json" {
+		t.Fatalf("unexpected upstream request path=%q auth=%q content-type=%q", gotPath, gotAuth, gotContentType)
+	}
+	if gotBody["model"] != "deepseek-flash" || gotBody["stream"] != false {
+		t.Fatalf("unexpected upstream payload: %+v", gotBody)
+	}
+	messages, ok := gotBody["messages"].([]any)
+	if !ok || len(messages) != 1 {
+		t.Fatalf("unexpected messages payload: %+v", gotBody["messages"])
+	}
+	message, _ := messages[0].(map[string]any)
+	if message["role"] != "user" || message["content"] != "你好" {
+		t.Fatalf("unexpected message payload: %+v", message)
+	}
+}
+
+func TestModelTestResponsesShape(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		io.WriteString(w, `{"output":"ok"}`)
+	}))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	c := saveTestChannel(t, s, Channel{Name: "official", BaseURL: upstream.URL + "/v1", APIKey: "secret", Model: "deepseek-flash", RemoteModel: "deepseek-flash", Enabled: true})
+	resp, b := runModelTest(t, h, c.ID, `{"protocol":"responses","model":"deepseek-flash","prompt":"你好"}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d: %s", resp.StatusCode, b)
+	}
+	got := decodeModelTestResponse(t, b)
+	if got.Status != 200 || got.Protocol != "responses" {
+		t.Fatalf("unexpected model test result: %+v", got)
+	}
+	if gotPath != "/v1/responses" || gotBody["input"] != "你好" || gotBody["stream"] != false || gotBody["model"] != "deepseek-flash" {
+		t.Fatalf("unexpected upstream request path=%q body=%+v", gotPath, gotBody)
+	}
+	if !bytes.Contains(got.Body, []byte(`"output":"ok"`)) {
+		t.Fatalf("body was not passed through: %s", got.Body)
+	}
+}
+
+func TestModelTestMessagesShapeAndHeaders(t *testing.T) {
+	paths := []string{}
+	versions := []string{}
+	betas := []string{}
+	keys := []string{}
+	bodies := []map[string]any{}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		versions = append(versions, r.Header.Get("anthropic-version"))
+		betas = append(betas, r.Header.Get("anthropic-beta"))
+		keys = append(keys, r.Header.Get("x-api-key"))
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		bodies = append(bodies, body)
+		io.WriteString(w, `{"type":"message"}`)
+	}))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	c := saveTestChannel(t, s, Channel{Name: "official", BaseURL: upstream.URL + "/v1", MessagesBaseURL: upstream.URL + "/anthropic/v1", APIKey: "secret", Model: "deepseek-flash", RemoteModel: "deepseek-flash", Enabled: true, SupportsMessages: true})
+	payload := `{"protocol":"messages","model":"deepseek-flash","prompt":"你好"}`
+	if resp, b := runModelTest(t, h, c.ID, payload); resp.StatusCode != 200 {
+		t.Fatalf("status %d: %s", resp.StatusCode, b)
+	}
+	if resp, b := runModelTestWithHeaders(t, h, c.ID, payload, map[string]string{"anthropic-version": "2024-01-01", "anthropic-beta": "x"}); resp.StatusCode != 200 {
+		t.Fatalf("status %d: %s", resp.StatusCode, b)
+	}
+	if len(paths) != 2 || paths[0] != "/anthropic/v1/messages" || paths[1] != "/anthropic/v1/messages" {
+		t.Fatalf("unexpected upstream paths: %+v", paths)
+	}
+	if versions[0] != "2023-06-01" || versions[1] != "2024-01-01" {
+		t.Fatalf("unexpected anthropic versions: %+v", versions)
+	}
+	if betas[0] != "" || betas[1] != "x" {
+		t.Fatalf("unexpected anthropic betas: %+v", betas)
+	}
+	if keys[0] != "secret" || keys[1] != "secret" {
+		t.Fatalf("unexpected x-api-key values: %+v", keys)
+	}
+	for _, body := range bodies {
+		if body["max_tokens"] != float64(512) || body["model"] != "deepseek-flash" {
+			t.Fatalf("unexpected messages payload: %+v", body)
+		}
+		messages, ok := body["messages"].([]any)
+		if !ok || len(messages) != 1 {
+			t.Fatalf("unexpected messages payload: %+v", body)
+		}
+		message, _ := messages[0].(map[string]any)
+		if message["content"] != "你好" {
+			t.Fatalf("unexpected message content: %+v", message)
+		}
+		if _, ok := body["stream"]; ok {
+			t.Fatalf("messages test must not send stream: %+v", body)
+		}
+	}
+}
+
+func TestModelTestOpenCodeGoSessionAndIdentity(t *testing.T) {
+	sessions := []string{}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sessions = append(sessions, r.Header.Get("x-opencode-session"))
+		if r.Header.Get("User-Agent") != "SeekWell/0.1" {
+			t.Errorf("unexpected user agent %q", r.Header.Get("User-Agent"))
+		}
+		io.WriteString(w, `{"choices":[]}`)
+	}))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	c := saveTestChannel(t, s, Channel{Name: "opencode", BaseURL: upstream.URL + "/v1", APIKey: "secret", Model: "deepseek-flash", RemoteModel: "deepseek-v4.1-flash", Enabled: true, Kind: "opencode_go"})
+	for i := 0; i < 2; i++ {
+		if resp, b := runModelTest(t, h, c.ID, `{"protocol":"chat","model":"deepseek-v4.1-flash","prompt":"hi"}`); resp.StatusCode != 200 {
+			t.Fatalf("status %d: %s", resp.StatusCode, b)
+		}
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(sessions))
+	}
+	for _, session := range sessions {
+		decoded, err := hex.DecodeString(session)
+		if err != nil || len(decoded) != 16 {
+			t.Fatalf("invalid session header %q", session)
+		}
+	}
+	if sessions[0] == sessions[1] {
+		t.Fatal("model test reused the same opencode session")
+	}
+}
+
+func TestModelTestDoesNotLeakSecret(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer super-secret" || r.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("unexpected headers auth=%q content-type=%q", r.Header.Get("Authorization"), r.Header.Get("Content-Type"))
+		}
+		io.WriteString(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+	}))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	c := saveTestChannel(t, s, Channel{Name: "official", BaseURL: upstream.URL + "/v1", APIKey: "super-secret", Model: "deepseek-flash", RemoteModel: "deepseek-flash", Enabled: true})
+	resp, b := runModelTest(t, h, c.ID, `{"protocol":"chat","model":"deepseek-flash","prompt":"hi"}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d: %s", resp.StatusCode, b)
+	}
+	if bytes.Contains(b, []byte("super-secret")) {
+		t.Fatalf("model test response leaked the api key: %s", b)
+	}
+}
+
+func TestModelTestIgnoresRoutingGates(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"ok":true}`)
+	}))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	c := saveTestChannel(t, s, Channel{Name: "gated", BaseURL: upstream.URL + "/v1", APIKey: "secret", Model: "deepseek-flash", RemoteModel: "deepseek-flash", Enabled: false, Paid: true, AutoPaid: false})
+	if resp, b := runModelTest(t, h, c.ID, `{"protocol":"chat","model":"deepseek-flash","prompt":"hi"}`); resp.StatusCode != 200 {
+		t.Fatalf("chat status %d: %s", resp.StatusCode, b)
+	}
+	c.MessagesBaseURL = upstream.URL + "/anthropic/v1"
+	if err := s.SaveChannel(&c); err != nil {
+		t.Fatal(err)
+	}
+	if resp, b := runModelTest(t, h, c.ID, `{"protocol":"messages","model":"deepseek-flash","prompt":"hi"}`); resp.StatusCode != 200 {
+		t.Fatalf("messages status %d: %s", resp.StatusCode, b)
+	}
+}
+
+func TestModelTestUpstreamFailureIsAResult(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		io.WriteString(w, `{"error":{"message":"up"}}`)
+	}))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	c := saveTestChannel(t, s, Channel{Name: "official", BaseURL: upstream.URL + "/v1", APIKey: "secret", Model: "deepseek-flash", RemoteModel: "deepseek-flash", Enabled: true})
+	resp, b := runModelTest(t, h, c.ID, `{"protocol":"chat","model":"deepseek-flash","prompt":"hi"}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d: %s", resp.StatusCode, b)
+	}
+	got := decodeModelTestResponse(t, b)
+	if got.Status != http.StatusServiceUnavailable || !bytes.Contains(got.Body, []byte("up")) || got.DurationMS < 0 {
+		t.Fatalf("unexpected model test result: %+v", got)
+	}
+}
+
+func TestModelTestMissingChannel(t *testing.T) {
+	_, h := newTestServer(t)
+	resp, b := runModelTest(t, h, 999, `{"protocol":"chat","model":"deepseek-flash","prompt":"hi"}`)
+	if resp.StatusCode != 404 {
+		t.Fatalf("status %d: %s", resp.StatusCode, b)
+	}
+	if message := errorMessage(t, b); message != "渠道不存在" {
+		t.Fatalf("unexpected message %q", message)
+	}
+}
+
+func TestModelTestConnectionFailure(t *testing.T) {
+	closed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	closedURL := closed.URL
+	closed.Close()
+	s, h := newTestServer(t)
+	c := saveTestChannel(t, s, Channel{Name: "official", BaseURL: closedURL + "/v1", APIKey: "secret", Model: "deepseek-flash", RemoteModel: "deepseek-flash", Enabled: true})
+	resp, b := runModelTest(t, h, c.ID, `{"protocol":"chat","model":"deepseek-flash","prompt":"hi"}`)
+	if resp.StatusCode != 502 {
+		t.Fatalf("status %d: %s", resp.StatusCode, b)
+	}
+	message := errorMessage(t, b)
+	if !strings.Contains(message, "连接") || !strings.Contains(message, "已耗时") {
+		t.Fatalf("unexpected connection message %q", message)
+	}
+}
+
+func TestModelTestTimesOutSeparately(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(500 * time.Millisecond)
+		io.WriteString(w, `{}`)
+	}))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	s.testTimeout = 50 * time.Millisecond
+	c := saveTestChannel(t, s, Channel{Name: "official", BaseURL: upstream.URL + "/v1", APIKey: "secret", Model: "deepseek-flash", RemoteModel: "deepseek-flash", Enabled: true})
+	start := time.Now()
+	resp, b := runModelTest(t, h, c.ID, `{"protocol":"chat","model":"deepseek-flash","prompt":"hi"}`)
+	elapsed := time.Since(start)
+	if resp.StatusCode != 504 {
+		t.Fatalf("status %d: %s", resp.StatusCode, b)
+	}
+	if message := errorMessage(t, b); !strings.Contains(message, "超时") || !strings.Contains(message, "已耗时") {
+		t.Fatalf("unexpected timeout message %q", message)
+	}
+	if elapsed >= time.Second {
+		t.Fatalf("model test did not honor its own timeout: %s", elapsed)
+	}
+}
+
+func TestModelTestAllowsUnmappedModel(t *testing.T) {
+	var received string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		received, _ = body["model"].(string)
+		io.WriteString(w, `{"ok":true}`)
+	}))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	c := saveTestChannel(t, s, Channel{Name: "opencode", BaseURL: upstream.URL + "/v1", APIKey: "secret", Model: "deepseek-flash", RemoteModel: "deepseek-v4.1-flash", Enabled: true})
+	resp, b := runModelTest(t, h, c.ID, `{"protocol":"chat","model":"deepseek-v4-pro","prompt":"hi"}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d: %s", resp.StatusCode, b)
+	}
+	if got := decodeModelTestResponse(t, b); got.Model != "deepseek-v4-pro" {
+		t.Fatalf("unexpected echoed model: %+v", got)
+	}
+	if received != "deepseek-v4-pro" {
+		t.Fatalf("upstream received model %q", received)
+	}
+}
+
+func TestModelTestValidationMatrix(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"ok":true}`)
+	}))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	c := saveTestChannel(t, s, Channel{Name: "official", BaseURL: upstream.URL + "/v1", APIKey: "secret", Model: "deepseek-flash", RemoteModel: "deepseek-flash", Enabled: true})
+	cases := []struct {
+		name    string
+		payload string
+		reason  string
+	}{
+		{"empty prompt", `{"protocol":"chat","model":"deepseek-flash","prompt":""}`, "提示词"},
+		{"blank prompt", `{"protocol":"chat","model":"deepseek-flash","prompt":"   "}`, "提示词"},
+		{"oversized prompt", `{"protocol":"chat","model":"deepseek-flash","prompt":"` + strings.Repeat("x", 33*1024) + `"}`, "提示词"},
+		{"empty model", `{"protocol":"chat","model":"","prompt":"hi"}`, "模型"},
+		{"non-deepseek model", `{"protocol":"chat","model":"gpt-4o","prompt":"hi"}`, "模型"},
+		{"unknown protocol", `{"protocol":"embeddings","model":"deepseek-flash","prompt":"hi"}`, "协议"},
+		{"messages without address", `{"protocol":"messages","model":"deepseek-flash","prompt":"hi"}`, "Messages"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, b := runModelTest(t, h, c.ID, tc.payload)
+			if resp.StatusCode != 400 {
+				t.Fatalf("status %d: %s", resp.StatusCode, b)
+			}
+			message := errorMessage(t, b)
+			if !strings.Contains(message, tc.reason) {
+				t.Fatalf("error %q does not mention %q", message, tc.reason)
+			}
+		})
+	}
+	if resp, b := runModelTest(t, h, c.ID, `{"protocol":"chat","model":"deepseek","prompt":"hi"}`); resp.StatusCode != 200 {
+		t.Fatalf("minimal valid model was rejected: %d %s", resp.StatusCode, b)
+	}
+}
+
+func TestModelTestTruncatesLargeResponse(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, strings.Repeat("x", 2<<20))
+	}))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	c := saveTestChannel(t, s, Channel{Name: "official", BaseURL: upstream.URL + "/v1", APIKey: "secret", Model: "deepseek-flash", RemoteModel: "deepseek-flash", Enabled: true})
+	resp, b := runModelTest(t, h, c.ID, `{"protocol":"chat","model":"deepseek-flash","prompt":"hi"}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d: %s", resp.StatusCode, b)
+	}
+	got := decodeModelTestResponse(t, b)
+	if !got.Truncated || got.Status != 200 {
+		t.Fatalf("unexpected model test result: %+v", got)
+	}
+	if len(b) >= 3<<19 {
+		t.Fatalf("model test response is not bounded: %d bytes", len(b))
+	}
+}
+
+func TestModelTestDoesNotWriteRequestHistory(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"ok":true}`)
+	}))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	c := saveTestChannel(t, s, Channel{Name: "official", BaseURL: upstream.URL + "/v1", APIKey: "secret", Model: "deepseek-flash", RemoteModel: "deepseek-flash", Enabled: true})
+	if resp, b := runModelTest(t, h, c.ID, `{"protocol":"chat","model":"deepseek-flash","prompt":"hi"}`); resp.StatusCode != 200 {
+		t.Fatalf("status %d: %s", resp.StatusCode, b)
+	}
+	if got := historyRaw(t, h); strings.TrimSpace(string(got)) != "[]" {
+		t.Fatalf("model test wrote request history: %s", got)
+	}
+}
+
+func TestModelTestConcurrentRequests(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"ok":true}`)
+	}))
+	defer upstream.Close()
+	s, h := newTestServer(t)
+	c := saveTestChannel(t, s, Channel{Name: "official", BaseURL: upstream.URL + "/v1", APIKey: "secret", Model: "deepseek-flash", RemoteModel: "deepseek-flash", Enabled: true})
+	results := make(chan string, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			req, _ := http.NewRequest(http.MethodPost, h.URL+"/api/channels/"+strconv.FormatInt(c.ID, 10)+"/test", strings.NewReader(`{"protocol":"chat","model":"deepseek-flash","prompt":"hi"}`))
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				results <- err.Error()
+				return
+			}
+			defer resp.Body.Close()
+			b, _ := io.ReadAll(resp.Body)
+			results <- strconv.Itoa(resp.StatusCode) + " " + string(b)
+		}()
+	}
+	for i := 0; i < 2; i++ {
+		if result := <-results; !strings.HasPrefix(result, "200 ") {
+			t.Fatalf("concurrent model test failed: %s", result)
+		}
+	}
+}

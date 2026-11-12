@@ -76,7 +76,7 @@ test('T2 图标位使用 Emoji 12.1 内的彩色 emoji', () => {
   }
 });
 
-test('T3 外部接口集合恰好为六条', () => {
+test('T3 外部接口集合恰好为七条', () => {
   const paths = new Set();
   for (const match of allSource.matchAll(/['"`](\/(?:api|v1)\/[^'"`]*)['"`]/g)) {
     paths.add(match[1].replace(/\$\{[^}]+\}/g, '${id}'));
@@ -86,6 +86,7 @@ test('T3 外部接口集合恰好为六条', () => {
     '/api/channels/${id}',
     '/api/channels/${id}/discover',
     '/api/channels/${id}/speedtest',
+    '/api/channels/${id}/test',
     '/api/requests',
     '/v1/tools/search',
   ].sort());
@@ -253,4 +254,19 @@ test('T17 调用记录展示渠道类型且未知不猜', () => {
 
   const channels = read(join(componentsRoot, 'ChannelsTable.tsx'));
   assert.match(channels, /kindLabel\(channel\.kind\)/, '渠道管理页未复用 kindLabel');
+});
+
+test('T18 模型测试入口、付费确认与结果展示', () => {
+  const shell = read(join(componentsRoot, 'Shell.tsx'));
+  assert.match(shell, /id:\s*'test'[\s\S]*?label:\s*'模型测试'/, '侧栏缺少模型测试 tab');
+  const app = read(join(componentsRoot, 'App.tsx'));
+  assert.match(app, /ModelTestPanel/, '模型测试页面未接入 App');
+  assert.match(apiSource, /testModel:\s*\(id:\s*number[\s\S]*?\/api\/channels\/\$\{id\}\/test/, '缺少模型测试 API 客户端');
+  assert.match(componentSource, /channel\.paid\s*&&\s*!window\.confirm\(/, '付费渠道模型测试前缺少费用确认');
+  assert.match(componentSource, /copy\.modelTestConfirm/, '模型测试确认未引用 copy');
+  assert.match(componentSource, /请求中/, '模型测试按钮未显示进行中文案');
+  assert.match(componentSource, /copy\.modelTestUnmapped/, '未映射模型缺少标注');
+  assert.match(copySource, /未加入路由配置/, '未映射模型标注文案缺失');
+  assert.match(componentSource, /JSON\.stringify\([\s\S]*?null,\s*2\)/, '结果区缺少 Pretty JSON 展示');
+  assert.match(componentSource, /copy\.modelTestNotJSON/, '非 JSON 响应缺少标注');
 });
