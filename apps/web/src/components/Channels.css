@@ -1,0 +1,150 @@
+.table-scroll {
+  max-height: 560px;
+  overflow: auto;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+  text-align: left;
+}
+
+th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: var(--space-3) var(--space-4);
+  color: var(--text-muted);
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: var(--text-3xs);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+td {
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--row-line);
+  vertical-align: top;
+}
+
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+tbody tr:hover {
+  background: var(--surface-raised);
+}
+
+.channel-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.channel-mark {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+
+.channel-cell__text {
+  min-width: 0;
+}
+
+.channel-cell__name,
+.cell-value,
+.cell-sub {
+  display: block;
+  max-width: 30ch;
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+
+.channel-cell__name {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.cell-sub {
+  margin-top: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.cell-value {
+  color: var(--text);
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.status__dot {
+  width: 6px;
+  height: 6px;
+  background: var(--success);
+  border-radius: var(--radius-pill);
+}
+
+.status--off .status__dot {
+  background: var(--dot-off);
+}
+
+.status--off {
+  color: var(--text-secondary);
+}
+
+.priority {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  justify-content: flex-end;
+}
+
+.actions .button {
+  min-height: 30px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-xs);
+}
+
+@media (max-width: 450px) {
+  th,
+  td {
+    padding: var(--space-3);
+  }
+
+  .channel-cell__name,
+  .cell-value,
+  .cell-sub {
+    max-width: 18ch;
+  }
+}

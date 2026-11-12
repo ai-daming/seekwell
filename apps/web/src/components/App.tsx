@@ -1,0 +1,289 @@
+import { useEffect, useState } from 'react';
+import type { FormEvent } from 'react';
+import '../theme.css';
+import '../base.css';
+import './App.css';
+import { api, request } from '../api';
+import { copy } from '../copy';
+import { freshDraft, type Channel, type Draft, type Entry, type Tab } from '../types';
+import { ActivityTable } from './ActivityTable';
+import { ChannelDialog } from './ChannelDialog';
+import { ChannelsTable } from './ChannelsTable';
+import { Icon } from './Icon';
+import { ModelsDialog } from './ModelsDialog';
+import { Overview } from './Overview';
+import { SearchPanel } from './SearchPanel';
+import { Shell } from './Shell';
+
+export default function App() {
+  const [channels, setChannels] = useState<Channel[]>([]);
+  const [entries, setEntries] = useState<Entry[]>([]);
+  const [tab, setTab] = useState<Tab>('overview');
+  const [modal, setModal] = useState(false);
+  const [editing, setEditing] = useState<number | null>(null);
+  const [draft, setDraft] = useState<Draft>(freshDraft());
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [query, setQuery] = useState('');
+  const [searching, setSearching] = useState(false);
+  const [searchResult, setSearchResult] = useState('');
+  const [discovered, setDiscovered] = useState<{ name: string; models: string[] } | null>(null);
+  const [discovering, setDiscovering] = useState<number | null>(null);
+
+  async function refresh() {
+    setLoading(true);
+    try {
+      const [nextChannels, nextEntries] = await Promise.all([api.channels(), api.requests()]);
+      setChannels(nextChannels);
+      setEntries(nextEntries);
+      setError('');
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '连接失败');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  const enabled = channels.filter((channel) => channel.enabled);
+  const models = [...new Set(enabled.map((channel) => channel.model))];
+
+  function add() {
+    setEditing(null);
+    setDraft(freshDraft());
+    setError('');
+    setModal(true);
+  }
+
+  function edit(channel: Channel) {
+    setEditing(channel.id);
+    setDraft({ ...channel, api_key: '' });
+    setError('');
+    setModal(true);
+  }
+
+  function update<K extends keyof Draft>(key: K, value: Draft[K]) {
+    setDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  function changeKind(kind: string) {
+    const official = kind === 'deepseek';
+    const openCodeGo = kind === 'opencode_go';
+    setDraft((current) => ({
+      ...current,
+      kind,
+      base_url: official
+        ? 'https://api.deepseek.com/v1'
+        : openCodeGo
+          ? 'https://opencode.ai/inference/go/v1'
+          : current.base_url,
+      remote_model: openCodeGo ? 'deepseek-v4.1-flash' : 'deepseek-flash',
+      supports_tools: official || openCodeGo,
+      supports_images: official,
+      supports_responses: official,
+      supports_messages: official,
+      messages_base_url: official ? 'https://api.deepseek.com/anthropic/v1' : '',
+    }));
+  }
+
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+    setError('');
+    const payload = { ...draft, api_key: draft.api_key ?? '' };
+    try {
+      if (editing) {
+        await request<Channel>(`/api/channels/${editing}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      } else {
+        await api.createChannel(payload);
+      }
+      setModal(false);
+      await refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '保存失败');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function discover(channel: Channel) {
+    setDiscovering(channel.id);
+    setError('');
+    try {
+      const data = await api.discoverModels(channel.id);
+      setDiscovered({ name: channel.name, models: data.models });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '查询失败');
+    } finally {
+      setDiscovering(null);
+    }
+  }
+
+  async function remove(channel: Channel) {
+    if (!window.confirm(`${copy.deleteConfirm}「${channel.name}」？`)) return;
+    try {
+      await api.deleteChannel(channel.id);
+      await refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '删除失败');
+    }
+  }
+
+  async function toggle(channel: Channel) {
+    try {
+      await request<Channel>(`/api/channels/${channel.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...channel, api_key: '', enabled: !channel.enabled }),
+      });
+      await refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '更新失败');
+    }
+  }
+
+  async function runSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSearching(true);
+    setError('');
+    try {
+      const result = await api.search(query);
+      setSearchResult(JSON.stringify(result, null, 2));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '搜索失败');
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  return (
+    <>
+      <Shell
+        tab={tab}
+        refreshing={loading}
+        onTabChange={setTab}
+        onRefresh={() => void refresh()}
+      >
+        {error && !modal && (
+          <div className="error" role="alert">
+            {error}
+          </div>
+        )}
+
+        {tab === 'overview' && (
+          <Overview
+            channels={channels}
+            enabledCount={enabled.length}
+            modelCount={models.length}
+            loading={loading}
+            discovering={discovering}
+            onAdd={add}
+            onManage={() => setTab('channels')}
+            onDiscover={(channel) => void discover(channel)}
+            onEdit={edit}
+            onToggle={(channel) => void toggle(channel)}
+            onRemove={(channel) => void remove(channel)}
+          />
+        )}
+
+        {tab === 'channels' && (
+          <>
+            <div className="page-head">
+              <div>
+                <div className="eyebrow">YOUR SOURCES</div>
+                <h1>渠道管理</h1>
+                <p>添加已有的 API 或兼容网关。数值越小，优先级越高。</p>
+              </div>
+              <button type="button" className="button button--primary" onClick={add}>
+                <Icon name="add" /> 添加渠道
+              </button>
+            </div>
+            <div className="notice">
+              <Icon name="info" />
+              <span>{copy.channelNotice}</span>
+            </div>
+            <section>
+              {loading ? (
+                <div className="empty">正在加载…</div>
+              ) : (
+                <ChannelsTable
+                  channels={channels}
+                  discovering={discovering}
+                  onAdd={add}
+                  onDiscover={(channel) => void discover(channel)}
+                  onEdit={edit}
+                  onToggle={(channel) => void toggle(channel)}
+                  onRemove={(channel) => void remove(channel)}
+                />
+              )}
+            </section>
+          </>
+        )}
+
+        {tab === 'search' && (
+          <>
+            <div className="page-head">
+              <div>
+                <div className="eyebrow">DEEPSEEK SEARCH</div>
+                <h1>搜索测试</h1>
+                <p>通过已启用且允许自动调用的 DeepSeek 官方渠道发起搜索。</p>
+              </div>
+            </div>
+            <SearchPanel
+              query={query}
+              searching={searching}
+              result={searchResult}
+              onQueryChange={setQuery}
+              onSubmit={(event) => void runSearch(event)}
+            />
+          </>
+        )}
+
+        {tab === 'activity' && (
+          <>
+            <div className="page-head">
+              <div>
+                <div className="eyebrow">REQUEST HISTORY</div>
+                <h1>调用记录</h1>
+                <p>查看请求的实际渠道和响应状态。仅保留调用元数据。</p>
+              </div>
+              <button
+                type="button"
+                className="button button--ghost"
+                onClick={() => void refresh()}
+                disabled={loading}
+              >
+                <Icon name="refresh" /> 刷新
+              </button>
+            </div>
+            <section>
+              <ActivityTable entries={entries} />
+            </section>
+          </>
+        )}
+      </Shell>
+
+      <ModelsDialog discovered={discovered} onClose={() => setDiscovered(null)} />
+
+      <ChannelDialog
+        open={modal}
+        editing={editing !== null}
+        draft={draft}
+        error={error}
+        saving={saving}
+        onChange={update}
+        onKindChange={changeKind}
+        onClose={() => setModal(false)}
+        onSubmit={(event) => void save(event)}
+      />
+    </>
+  );
+}
