@@ -1,0 +1,33 @@
+.activity-time {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.activity-model,
+.activity-channel {
+  display: block;
+  max-width: 28ch;
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+
+.activity-status {
+  color: var(--success);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-status--error {
+  color: var(--danger);
+}
+
+.activity-duration {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
