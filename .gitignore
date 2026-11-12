@@ -1,0 +1,7 @@
+apps/web/node_modules/
+apps/web/dist/
+apps/server/data/
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
