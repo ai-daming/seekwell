@@ -112,6 +112,8 @@ test('T4 copy 不变量非空且被组件引用', () => {
     'emptyChannels',
     'speedTestConfirm',
     'speedTestNotice',
+    'authModeCli',
+    'dimAuthHint',
   ];
   for (const name of required) {
     const match = copySource.match(new RegExp(`\\b${name}\\s*:\\s*(['"\`])([^'"\`]+)\\1`));
@@ -271,4 +273,18 @@ test('T18 模型测试入口、付费确认与结果展示', () => {
   assert.match(copySource, /未加入路由配置/, '未映射模型标注文案缺失');
   assert.match(componentSource, /JSON\.stringify\([\s\S]*?null,\s*2\)/, '结果区缺少 Pretty JSON 展示');
   assert.match(componentSource, /copy\.modelTestNotJSON/, '非 JSON 响应缺少标注');
+});
+
+test('T19 DimAgent 不提供 API Key 入口', () => {
+  const dialog = read(join(componentsRoot, 'ChannelDialog.tsx'));
+  const app = read(join(componentsRoot, 'App.tsx'));
+  assert.match(dialog, /draft\.kind\s*===\s*'dimagent'/, 'DimAgent 缺少固定授权展示分支');
+  assert.match(dialog, /copy\.authModeCli/, 'DimAgent 固定展示未引用 copy.authModeCli');
+  assert.match(dialog, /copy\.dimAuthHint/, 'DimAgent 授权提示未引用 copy.dimAuthHint');
+  assert.doesNotMatch(dialog, /填 API Key/, 'DimAgent 仍出现「填 API Key」文案');
+  assert.doesNotMatch(dialog, /<option[^>]*value=["']api_key["']/, '仍存在 API Key 凭据选项');
+  assert.doesNotMatch(dialog, /凭据方式[\s\S]{0,120}<select/, 'DimAgent 仍渲染凭据方式下拉');
+  assert.match(app, /auth_mode:\s*dimAgent\s*\?\s*'cli_oauth'\s*:\s*'api_key'/, 'changeKind 未按渠道类型设置凭据方式');
+  assert.match(app, /channel\.kind === 'dimagent' \? 'cli_oauth' : channel\.auth_mode/, '编辑 DimAgent 未固定 cli_oauth');
+  assert.match(app, /channel\.kind === 'dimagent'[\s\S]{0,160}api_key: ''/, '编辑 DimAgent 未清空 API Key');
 });

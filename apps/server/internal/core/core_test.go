@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -1365,8 +1367,25 @@ func postJSON(t *testing.T, url, body string) (int, []byte) {
 	return resp.StatusCode, b
 }
 
+func writeDimAuth(t *testing.T, token string) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("DIMCODE_HOME", dir)
+	data := fmt.Sprintf(`{"nextApiOauth":{"type":"oauth","access":%q,"expires":%d}}`, token, time.Now().Add(time.Hour).UnixMilli())
+	if err := os.WriteFile(filepath.Join(dir, "auth.json"), []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func dimAgentDraft(name, baseURL, kind string) Channel {
-	return Channel{Name: name, BaseURL: baseURL, APIKey: "secret-key", Model: "deepseek-flash", RemoteModel: "deepseek-v4.1-flash", Enabled: true, Paid: true, Kind: kind}
+	c := Channel{Name: name, BaseURL: baseURL, Model: "deepseek-flash", RemoteModel: "deepseek-v4.1-flash", Enabled: true, Paid: true, Kind: kind}
+	if kind == "dimagent" {
+		c.AuthMode = "cli_oauth"
+	} else {
+		c.AuthMode = "api_key"
+		c.APIKey = "secret-key"
+	}
+	return c
 }
 
 func TestDimAgentKindRoundTripAndBoundaries(t *testing.T) {
@@ -1396,7 +1415,7 @@ func TestDimAgentKindRoundTripAndBoundaries(t *testing.T) {
 	if err = json.Unmarshal(raw, &listed); err != nil || len(listed) != 1 {
 		t.Fatalf("invalid channels response %q: %v", raw, err)
 	}
-	if listed[0].Kind != "dimagent" || !listed[0].HasKey || listed[0].APIKey != "" {
+	if listed[0].Kind != "dimagent" || listed[0].HasKey || listed[0].AuthMode != "cli_oauth" || listed[0].APIKey != "" {
 		t.Fatalf("dimagent kind did not round-trip: %+v", listed[0])
 	}
 	h.Close()
@@ -1421,9 +1440,17 @@ func TestDimAgentKindRoundTripAndBoundaries(t *testing.T) {
 	}
 	createdBody, _ := io.ReadAll(created.Body)
 	created.Body.Close()
-	if created.StatusCode != 201 || !bytes.Contains(createdBody, []byte(`"kind":"dimagent"`)) {
-		t.Fatalf("POST /api/channels rejected dimagent: %d %s", created.StatusCode, createdBody)
+	if created.StatusCode != 201 || !bytes.Contains(createdBody, []byte(`"kind":"dimagent"`)) || !bytes.Contains(createdBody, []byte(`"auth_mode":"cli_oauth"`)) || !bytes.Contains(createdBody, []byte(`"has_key":false`)) || bytes.Contains(createdBody, []byte("api-key")) {
+		t.Fatalf("POST /api/channels did not normalize dimagent: %d %s", created.StatusCode, createdBody)
 	}
+	var createdMode, createdKey string
+	if err := s.db.QueryRow(`SELECT auth_mode,api_key FROM channels WHERE name='api-created'`).Scan(&createdMode, &createdKey); err != nil || createdMode != "cli_oauth" || createdKey != "" {
+		t.Fatalf("POST persisted old credential: mode=%q key=%q err=%v", createdMode, createdKey, err)
+	}
+	if _, err := s.db.Exec(`UPDATE channels SET auth_mode='api_key',api_key='old-key' WHERE id=?`, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	c.AuthMode = "cli_oauth"
 	c.APIKey = ""
 	updateBody, _ := json.Marshal(c)
 	updateReq, _ := http.NewRequest(http.MethodPut, h.URL+"/api/channels/"+strconv.FormatInt(c.ID, 10), bytes.NewReader(updateBody))
@@ -1468,6 +1495,7 @@ func TestDimAgentKindWhitelistRegression(t *testing.T) {
 }
 
 func TestDimAgentCapabilityGates(t *testing.T) {
+	writeDimAuth(t, "test-oauth-token")
 	var hits int
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits++
@@ -1534,6 +1562,7 @@ func TestDimAgentCapabilityGates(t *testing.T) {
 }
 
 func TestDimAgentPaidGate(t *testing.T) {
+	writeDimAuth(t, "test-oauth-token")
 	var hits int
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits++
@@ -1573,6 +1602,7 @@ func TestDimAgentPaidGate(t *testing.T) {
 }
 
 func TestDimAgentModelMappingAndHistory(t *testing.T) {
+	writeDimAuth(t, "test-oauth-token")
 	var gotModel, gotAuth, gotContentType string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
@@ -1596,7 +1626,7 @@ func TestDimAgentModelMappingAndHistory(t *testing.T) {
 	if status != 200 || !bytes.Contains(body, []byte(`"content":"ok"`)) {
 		t.Fatalf("unexpected response %d: %s", status, body)
 	}
-	if gotModel != "deepseek-v4.1-flash" || gotAuth != "Bearer secret-key" || gotContentType != "application/json" {
+	if gotModel != "deepseek-v4.1-flash" || gotAuth != "Bearer test-oauth-token" || gotContentType != "application/json" {
 		t.Fatalf("unexpected upstream request model=%q auth=%q content-type=%q", gotModel, gotAuth, gotContentType)
 	}
 	entries := historyEntries(t, h)
@@ -1618,6 +1648,7 @@ func TestDimAgentModelMappingAndHistory(t *testing.T) {
 }
 
 func TestDimAgentDiscover(t *testing.T) {
+	writeDimAuth(t, "test-oauth-token")
 	var gotAuth, gotSession, gotUserAgent string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {
@@ -1644,14 +1675,14 @@ func TestDimAgentDiscover(t *testing.T) {
 	if strings.Join(catalog.Models, ",") != "deepseek-v4.1-flash,deepseek-v4-pro" {
 		t.Fatalf("unexpected models: %+v", catalog.Models)
 	}
-	if gotAuth != "Bearer secret-key" {
+	if gotAuth != "Bearer test-oauth-token" {
 		t.Fatalf("missing bearer token: %q", gotAuth)
 	}
-	if gotSession != "" || gotUserAgent != "SeekWell/0.1" {
+	if gotSession != "" || gotUserAgent != "DimAgent/0.5.27" {
 		t.Fatalf("unexpected dimagent headers: session=%q user-agent=%q", gotSession, gotUserAgent)
 	}
-	if bytes.Contains(body, []byte("secret-key")) {
-		t.Fatalf("discover response leaked the api key: %s", body)
+	if bytes.Contains(body, []byte("test-oauth-token")) {
+		t.Fatalf("discover response leaked the oauth token: %s", body)
 	}
 
 	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
