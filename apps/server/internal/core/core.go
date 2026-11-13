@@ -888,7 +888,7 @@ func (s *Server) proxyModel(w http.ResponseWriter, r *http.Request, path string)
 			}
 			continue
 		}
-		if resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 429 || resp.StatusCode >= 500 {
+		if resp.StatusCode == 401 || resp.StatusCode == 402 || resp.StatusCode == 403 || resp.StatusCode == 429 || resp.StatusCode >= 500 {
 			s.record(model, c, resp.StatusCode, start, nil)
 			io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 			resp.Body.Close()
