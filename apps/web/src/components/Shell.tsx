@@ -71,7 +71,7 @@ export function Shell({ tab, refreshing, onTabChange, onRefresh, children }: She
           <p>连接已有渠道，让每一份额度找到用处。</p>
           <div className="version">
             <span>SEEKWELL</span>
-            <span>V0.1</span>
+            <span>{__SEEKWELL_VERSION__}</span>
           </div>
         </div>
       </aside>

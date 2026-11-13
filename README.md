@@ -74,3 +74,7 @@ curl http://127.0.0.1:8350/v1/tools/search \
 - OpenCode Go 和 DimAgent 的真实 API 验证见各自渠道说明；DimAgent 的真实令牌自动刷新尚待自然过期验收。尚无 DeepSeek 官方 API、OpenDesign、WorkBuddy 或真实 DSH 客户端的端到端验收。模拟上游通过不等于这些渠道验收通过。
 
 整体方案与仍待确认的决策见 [设计文档](docs/design.md)。
+
+## 发布
+
+正式发布请按 [发布流程](docs/release.md) 操作：先在 GitHub 上为当前提交创建 Release 和 tag，再执行 `make release`。管理界面左下角的版本号和北京时间日期来自该 Release；`npm run dev`、`npm run build` 和 `make web` 显示「开发版」。

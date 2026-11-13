@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "build:release": "tsc --noEmit && node scripts/build-release.mjs"
   },
   "dependencies": {
     "react": "19.3.1",
