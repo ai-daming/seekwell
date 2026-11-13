@@ -85,7 +85,7 @@ export type ModelTestResult = {
 
 export type Draft = Omit<Channel, 'id' | 'has_key'>;
 
-export type Tab = 'overview' | 'channels' | 'test' | 'search' | 'activity' | 'keys';
+export type Tab = 'overview' | 'channels' | 'keys' | 'usage' | 'test' | 'search' | 'activity';
 
 export const freshDraft = (): Draft => ({
   name: '',
@@ -115,3 +115,39 @@ export const kindLabel = (kind: string): string => {
 };
 
 export type AccessKey = {id:number;name:string;prefix:string;enabled:boolean;request_count:number;success_count:number;failure_count:number;usage_known_count:number;input_tokens:number|null;output_tokens:number|null};
+
+export type AccessUsageTotals = {
+  request_count: number;
+  success_count: number;
+  failure_count: number;
+  usage_known_count: number;
+  usage_unknown_count: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+};
+
+export type UsageOverall = AccessUsageTotals & {
+  key_count: number;
+  enabled_key_count: number;
+  last_request_at: string | null;
+};
+
+export type UsageKeyStats = AccessUsageTotals & {
+  id: number;
+  name: string;
+  prefix: string;
+  enabled: boolean;
+  created_at: string;
+  last_request_at: string | null;
+};
+
+export type UsageDaily = AccessUsageTotals & {
+  date: string;
+};
+
+export type UsageStats = {
+  overall: UsageOverall;
+  keys: UsageKeyStats[];
+  daily: UsageDaily[];
+};
