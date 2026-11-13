@@ -21,6 +21,7 @@ func main() {
 	}
 	defer s.Close()
 	s.StartPricingSync(context.Background())
+	s.StartQuotaProbes(context.Background())
 	web := os.Getenv("SEEKWELL_WEB")
 	if web == "" {
 		web = "../web/dist"
