@@ -433,7 +433,7 @@ export default function App() {
               <div>
                 <div className="eyebrow">REQUEST HISTORY</div>
                 <h1>调用记录</h1>
-                <p>查看请求的实际渠道和响应状态。仅保留调用元数据。</p>
+                <p>查看请求的实际渠道、响应状态和上游返回的 Token 用量。仅保留调用元数据。</p>
               </div>
               <button
                 type="button"

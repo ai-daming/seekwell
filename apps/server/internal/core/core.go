@@ -66,7 +66,7 @@ func New(path string) (*Server, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS channels (id INTEGER PRIMARY KEY, name TEXT NOT NULL, base_url TEXT NOT NULL, api_key TEXT NOT NULL, model TEXT NOT NULL, remote_model TEXT NOT NULL, enabled INTEGER NOT NULL, paid INTEGER NOT NULL, auto_paid INTEGER NOT NULL, priority INTEGER NOT NULL, kind TEXT NOT NULL); CREATE TABLE IF NOT EXISTS requests (id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, model TEXT NOT NULL, channel TEXT NOT NULL, status INTEGER NOT NULL, duration_ms INTEGER NOT NULL, kind TEXT NOT NULL DEFAULT '');`)
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS channels (id INTEGER PRIMARY KEY, name TEXT NOT NULL, base_url TEXT NOT NULL, api_key TEXT NOT NULL, model TEXT NOT NULL, remote_model TEXT NOT NULL, enabled INTEGER NOT NULL, paid INTEGER NOT NULL, auto_paid INTEGER NOT NULL, priority INTEGER NOT NULL, kind TEXT NOT NULL); CREATE TABLE IF NOT EXISTS requests (id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, model TEXT NOT NULL, channel TEXT NOT NULL, status INTEGER NOT NULL, duration_ms INTEGER NOT NULL, kind TEXT NOT NULL DEFAULT '', input_tokens INTEGER, output_tokens INTEGER, cache_hit_tokens INTEGER, cache_miss_tokens INTEGER);`)
 	if err != nil {
 		db.Close()
 		return nil, err
@@ -99,6 +99,16 @@ func New(path string) (*Server, error) {
 	if err != nil {
 		db.Close()
 		return nil, err
+	}
+	for _, column := range []string{"input_tokens", "output_tokens", "cache_hit_tokens", "cache_miss_tokens"} {
+		var count int
+		if err = db.QueryRow(`SELECT count(*) FROM pragma_table_info('requests') WHERE name=?`, column).Scan(&count); err == nil && count == 0 {
+			_, err = db.Exec(`ALTER TABLE requests ADD COLUMN ` + column + ` INTEGER`)
+		}
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
 	}
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS access_keys (id INTEGER PRIMARY KEY, name TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, prefix TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS access_requests (id INTEGER PRIMARY KEY, key_id INTEGER NOT NULL, created_at TEXT NOT NULL, path TEXT NOT NULL, status INTEGER NOT NULL, duration_ms INTEGER NOT NULL, input_tokens INTEGER, output_tokens INTEGER);`)
 	if err != nil {
@@ -598,8 +608,14 @@ func (s *Server) modelTest(w http.ResponseWriter, r *http.Request) {
 	fail(w, 404, "渠道不存在")
 }
 
+func nullableInt(n sql.NullInt64) any {
+	if n.Valid {
+		return n.Int64
+	}
+	return nil
+}
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {
-	rows, e := s.db.Query(`SELECT created_at,model,channel,kind,status,duration_ms FROM requests ORDER BY id DESC LIMIT 100`)
+	rows, e := s.db.Query(`SELECT created_at,model,channel,kind,status,duration_ms,input_tokens,output_tokens,cache_hit_tokens,cache_miss_tokens FROM requests ORDER BY id DESC LIMIT 100`)
 	if e != nil {
 		fail(w, 500, "读取记录失败")
 		return
@@ -609,16 +625,33 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var at, model, ch, kind string
 		var status, ms int
-		if e = rows.Scan(&at, &model, &ch, &kind, &status, &ms); e != nil {
+		var input, output, cacheHit, cacheMiss sql.NullInt64
+		if e = rows.Scan(&at, &model, &ch, &kind, &status, &ms, &input, &output, &cacheHit, &cacheMiss); e != nil {
 			fail(w, 500, "读取记录失败")
 			return
 		}
-		out = append(out, map[string]any{"created_at": at, "model": model, "channel": ch, "kind": kind, "status": status, "duration_ms": ms})
+		out = append(out, map[string]any{"created_at": at, "model": model, "channel": ch, "kind": kind, "status": status, "duration_ms": ms, "input_tokens": nullableInt(input), "output_tokens": nullableInt(output), "cache_hit_tokens": nullableInt(cacheHit), "cache_miss_tokens": nullableInt(cacheMiss)})
 	}
 	jsonOut(w, 200, out)
 }
-func (s *Server) record(model, name, kind string, status int, start time.Time) {
-	_, _ = s.db.Exec(`INSERT INTO requests(created_at,model,channel,kind,status,duration_ms) VALUES(?,?,?,?,?,?)`, time.Now().UTC().Format(time.RFC3339), model, name, kind, status, time.Since(start).Milliseconds())
+func (s *Server) record(model, name, kind string, status int, start time.Time, usage *usageTotals) {
+	var input, output, cacheHit, cacheMiss any
+	if usage != nil {
+		in, out, hit, miss := usage.normalized()
+		if in != nil {
+			input = *in
+		}
+		if out != nil {
+			output = *out
+		}
+		if hit != nil {
+			cacheHit = *hit
+		}
+		if miss != nil {
+			cacheMiss = *miss
+		}
+	}
+	_, _ = s.db.Exec(`INSERT INTO requests(created_at,model,channel,kind,status,duration_ms,input_tokens,output_tokens,cache_hit_tokens,cache_miss_tokens) VALUES(?,?,?,?,?,?,?,?,?,?)`, time.Now().UTC().Format(time.RFC3339), model, name, kind, status, time.Since(start).Milliseconds(), input, output, cacheHit, cacheMiss)
 }
 func requestCapabilities(v any) (tools, images bool) {
 	switch value := v.(type) {
@@ -728,7 +761,7 @@ func (s *Server) proxyModel(w http.ResponseWriter, r *http.Request, path string)
 		req.Header.Set("Content-Type", "application/json")
 		credential, err := s.credential(c)
 		if err != nil {
-			s.record(model, c.Name, c.Kind, 0, start)
+			s.record(model, c.Name, c.Kind, 0, start, nil)
 			continue
 		}
 		req.Header.Set("Authorization", "Bearer "+credential)
@@ -762,25 +795,27 @@ func (s *Server) proxyModel(w http.ResponseWriter, r *http.Request, path string)
 		applyDimOAuthHeaders(req, c)
 		resp, e := s.client.Do(req)
 		if e != nil {
-			s.record(model, c.Name, c.Kind, 0, start)
+			s.record(model, c.Name, c.Kind, 0, start, nil)
 			if r.Context().Err() != nil {
 				return
 			}
 			continue
 		}
 		if resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 429 || resp.StatusCode >= 500 {
-			s.record(model, c.Name, c.Kind, resp.StatusCode, start)
+			s.record(model, c.Name, c.Kind, resp.StatusCode, start, nil)
 			io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 			resp.Body.Close()
 			continue
 		}
 		w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 		w.Header().Set("X-SeekWell-Channel", c.Name)
-		w.WriteHeader(resp.StatusCode)
-		copyErr := copyStream(w, resp.Body)
+		usage := &usageTap{ResponseWriter: w}
+		usage.WriteHeader(resp.StatusCode)
+		copyErr := copyStream(usage, resp.Body)
 		resp.Body.Close()
+		usage.finish()
 		if copyErr != nil {
-			s.record(model, c.Name, c.Kind, 0, start)
+			s.record(model, c.Name, c.Kind, 0, start, &usage.usageTotals)
 			panic(http.ErrAbortHandler)
 		}
 		if session != "" && resp.StatusCode >= 200 && resp.StatusCode < 300 {
@@ -797,7 +832,7 @@ func (s *Server) proxyModel(w http.ResponseWriter, r *http.Request, path string)
 			}
 			s.mu.Unlock()
 		}
-		s.record(model, c.Name, c.Kind, resp.StatusCode, start)
+		s.record(model, c.Name, c.Kind, resp.StatusCode, start, &usage.usageTotals)
 		return
 	}
 	if attempted == 0 {

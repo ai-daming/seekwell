@@ -258,8 +258,8 @@ test('T17 调用记录展示渠道类型且未知不猜', () => {
   const activity = read(join(componentsRoot, 'ActivityTable.tsx'));
   assert.match(
     activity,
-    /<th>时间<\/th>\s*<th>统一模型<\/th>\s*<th>渠道<\/th>\s*<th>渠道类型<\/th>\s*<th>状态码<\/th>\s*<th>耗时<\/th>/,
-    '调用记录表头缺少「渠道类型」或顺序不对',
+    /<th>时间<\/th>\s*<th>统一模型<\/th>\s*<th>渠道<\/th>\s*<th>渠道类型<\/th>\s*<th>状态码<\/th>\s*<th>输入 tokens<\/th>\s*<th>输出 tokens<\/th>\s*<th>缓存命中率<\/th>\s*<th>耗时<\/th>/,
+    '调用记录表头缺少「渠道类型」「Token」或顺序不对',
   );
   assert.match(activity, /kindLabel\(entry\.kind\)/, '调用记录未复用 kindLabel');
 
@@ -359,4 +359,31 @@ test('T21 使用统计页面与接口', () => {
   assert.match(usage, /<caption[\s\S]*?<\/caption>/, '统计表缺少 caption');
   assert.match(usage, /toLocaleString\(\s*['"]zh-CN['"]\s*\)/, '统计数字/时间未本地化');
   assert.match(usage, /total_tokens/, '页面未展示合计 Token');
+});
+
+test('T22 调用记录展示输入/输出 Token 与缓存命中率且未知不猜', () => {
+  const typeSource = read(join(srcRoot, 'types.ts'));
+  assert.match(
+    typeSource,
+    /export type Entry\s*=\s*\{[\s\S]*?input_tokens:\s*number\s*\|\s*null;[\s\S]*?output_tokens:\s*number\s*\|\s*null;[\s\S]*?cache_hit_tokens:\s*number\s*\|\s*null;[\s\S]*?cache_miss_tokens:\s*number\s*\|\s*null;[\s\S]*?\};/,
+    'Entry 缺少可空的 token/缓存字段',
+  );
+
+  const activity = read(join(componentsRoot, 'ActivityTable.tsx'));
+  assert.match(activity, /<th>输入 tokens<\/th>/, '调用记录缺少输入 Token 列');
+  assert.match(activity, /<th>输出 tokens<\/th>/, '调用记录缺少输出 Token 列');
+  assert.match(activity, /<th>缓存命中率<\/th>/, '调用记录缺少缓存命中率列');
+  assert.match(activity, /entry\.input_tokens/, '输入 Token 未读取 entry.input_tokens');
+  assert.match(activity, /entry\.output_tokens/, '输出 Token 未读取 entry.output_tokens');
+  assert.match(activity, /copy\.usageUnknown/, 'Token 或命中率未知时未显示「未知」');
+  assert.match(activity, /cache_hit_tokens/, '命中率未使用 cache_hit_tokens');
+  assert.match(activity, /cache_miss_tokens/, '命中率未使用 cache_miss_tokens');
+  assert.match(
+    activity,
+    /const hit = entry\.cache_hit_tokens;[\s\S]*?const miss = entry\.cache_miss_tokens;[\s\S]*?hit \+ miss/,
+    '命中率分母未使用命中 + 未命中',
+  );
+  assert.match(activity, /input_tokens/, '命中率缺少 input_tokens 回退');
+  assert.match(activity, /Number\.isFinite\(/, '命中率未拦截 NaN/Infinity');
+  assert.match(activity, /toFixed\(1\)/, '命中率未格式化为一位小数');
 });
