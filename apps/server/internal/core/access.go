@@ -1,7 +1,6 @@
 package core
 
 import (
-	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -166,11 +165,8 @@ func (s *Server) recordAccess(id int64, path string, status int, start time.Time
 
 type usageWriter struct {
 	http.ResponseWriter
-	status              int
-	buf                 []byte
-	stream              bool
-	input, output       int64
-	hasInput, hasOutput bool
+	status int
+	usageCapture
 }
 
 func (w *usageWriter) WriteHeader(code int) {
@@ -185,64 +181,11 @@ func (w *usageWriter) Write(p []byte) (int, error) {
 	if w.status == 0 {
 		w.WriteHeader(200)
 	}
-	if len(w.buf)+len(p) <= 2<<20 {
-		w.buf = append(w.buf, p...)
-	} else {
-		w.buf = nil
-	}
-	if w.stream {
-		for {
-			i := bytes.IndexByte(w.buf, '\n')
-			if i < 0 {
-				break
-			}
-			line := bytes.TrimSpace(w.buf[:i])
-			w.buf = w.buf[i+1:]
-			if bytes.HasPrefix(line, []byte("data:")) {
-				w.parse(bytes.TrimSpace(line[5:]))
-			}
-		}
-	}
+	w.feed(p)
 	return w.ResponseWriter.Write(p)
 }
 func (w *usageWriter) Flush() {
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
-	}
-}
-func (w *usageWriter) finish() {
-	if !w.stream {
-		w.parse(w.buf)
-	} else if bytes.HasPrefix(bytes.TrimSpace(w.buf), []byte("data:")) {
-		w.parse(bytes.TrimSpace(bytes.TrimPrefix(bytes.TrimSpace(w.buf), []byte("data:"))))
-	}
-}
-func (w *usageWriter) parse(b []byte) {
-	var v map[string]any
-	if json.Unmarshal(b, &v) != nil {
-		return
-	}
-	w.findUsage(v)
-}
-func (w *usageWriter) findUsage(v map[string]any) {
-	if usage, ok := v["usage"].(map[string]any); ok {
-		for _, name := range []string{"prompt_tokens", "input_tokens"} {
-			if n, ok := usage[name].(float64); ok && n >= 0 {
-				w.input = int64(n)
-				w.hasInput = true
-			}
-		}
-		for _, name := range []string{"completion_tokens", "output_tokens"} {
-			if n, ok := usage[name].(float64); ok && n >= 0 {
-				w.output = int64(n)
-				w.hasOutput = true
-			}
-		}
-	}
-	if message, ok := v["message"].(map[string]any); ok {
-		w.findUsage(message)
-	}
-	if response, ok := v["response"].(map[string]any); ok {
-		w.findUsage(response)
 	}
 }

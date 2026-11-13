@@ -624,12 +624,16 @@ func TestSpeedTestConnectionFailure(t *testing.T) {
 }
 
 type historyEntry struct {
-	CreatedAt  string `json:"created_at"`
-	Model      string `json:"model"`
-	Channel    string `json:"channel"`
-	Kind       string `json:"kind"`
-	Status     int    `json:"status"`
-	DurationMS int    `json:"duration_ms"`
+	CreatedAt       string `json:"created_at"`
+	Model           string `json:"model"`
+	Channel         string `json:"channel"`
+	Kind            string `json:"kind"`
+	Status          int    `json:"status"`
+	DurationMS      int    `json:"duration_ms"`
+	InputTokens     *int64 `json:"input_tokens"`
+	OutputTokens    *int64 `json:"output_tokens"`
+	CacheHitTokens  *int64 `json:"cache_hit_tokens"`
+	CacheMissTokens *int64 `json:"cache_miss_tokens"`
 }
 
 func historyRaw(t *testing.T, h *httptest.Server) []byte {
@@ -787,6 +791,16 @@ CREATE TABLE requests (id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, model T
 	if len(got) != 1 || got[0].Channel != "legacy" || got[0].Kind != "" || got[0].Status != 429 {
 		t.Fatalf("legacy history not preserved: %+v", got)
 	}
+	for _, column := range []string{"input_tokens", "output_tokens", "cache_hit_tokens", "cache_miss_tokens"} {
+		var count int
+		if err := s.db.QueryRow(`SELECT count(*) FROM pragma_table_info('requests') WHERE name=?`, column).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("legacy database missing requests.%s: %d %v", column, count, err)
+		}
+	}
+	assertNilToken(t, "legacy input_tokens", got[0].InputTokens)
+	assertNilToken(t, "legacy output_tokens", got[0].OutputTokens)
+	assertNilToken(t, "legacy cache_hit_tokens", got[0].CacheHitTokens)
+	assertNilToken(t, "legacy cache_miss_tokens", got[0].CacheMissTokens)
 	key, err := s.newAccessKey("migration test")
 	if err != nil {
 		t.Fatal(err)
@@ -907,9 +921,14 @@ func TestRequestHistoryShapeAndLimit(t *testing.T) {
 	if len(shaped) != 100 {
 		t.Fatalf("expected 100 entries, got %d", len(shaped))
 	}
-	for _, key := range []string{"created_at", "model", "channel", "status", "duration_ms", "kind"} {
+	for _, key := range []string{"created_at", "model", "channel", "status", "duration_ms", "kind", "input_tokens", "output_tokens", "cache_hit_tokens", "cache_miss_tokens"} {
 		if _, ok := shaped[0][key]; !ok {
 			t.Fatalf("history entry missing %q: %v", key, shaped[0])
+		}
+	}
+	for _, key := range []string{"input_tokens", "output_tokens", "cache_hit_tokens", "cache_miss_tokens"} {
+		if shaped[0][key] != nil {
+			t.Fatalf("history %q must be null when backfilled rows have no usage: %v", key, shaped[0])
 		}
 	}
 	got := historyEntries(t, h)

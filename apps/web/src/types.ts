@@ -57,6 +57,10 @@ export type Entry = {
   kind: string;
   status: number;
   duration_ms: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_hit_tokens: number | null;
+  cache_miss_tokens: number | null;
 };
 
 export type SpeedTestResult = {
