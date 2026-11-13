@@ -87,6 +87,11 @@ func New(path string) (*Server, error) {
 			return nil, err
 		}
 	}
+	_, err = db.Exec(`UPDATE channels SET auth_mode='cli_oauth', api_key='' WHERE kind='dimagent' AND auth_mode<>'cli_oauth'`)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
 	var kindColumns int
 	if err = db.QueryRow(`SELECT count(*) FROM pragma_table_info('requests') WHERE name='kind'`).Scan(&kindColumns); err == nil && kindColumns == 0 {
 		_, err = db.Exec(`ALTER TABLE requests ADD COLUMN kind TEXT NOT NULL DEFAULT ''`)
@@ -125,17 +130,22 @@ func (s *Server) SaveChannel(c *Channel) error {
 	if c.Kind != "compatible" && c.Kind != "deepseek" && c.Kind != "opencode_go" && c.Kind != "dimagent" {
 		return errors.New("不支持的渠道类型")
 	}
-	if c.AuthMode == "" {
-		c.AuthMode = "api_key"
-	}
-	if c.AuthMode != "api_key" && c.AuthMode != "cli_oauth" {
-		return errors.New("不支持的凭据方式")
-	}
-	if c.AuthMode == "cli_oauth" && c.Kind != "dimagent" {
-		return errors.New("只有 DimAgent 渠道支持本机授权")
-	}
-	if c.AuthMode == "cli_oauth" && c.APIKey != "" {
-		return errors.New("使用本机 DimAgent 授权时不要填写 API Key")
+	if c.Kind == "dimagent" {
+		if c.AuthMode != "" && c.AuthMode != "api_key" && c.AuthMode != "cli_oauth" {
+			return errors.New("不支持的凭据方式")
+		}
+		c.AuthMode = "cli_oauth"
+		c.APIKey = ""
+	} else {
+		if c.AuthMode == "" {
+			c.AuthMode = "api_key"
+		}
+		if c.AuthMode == "cli_oauth" {
+			return errors.New("只有 DimAgent 渠道支持本机授权")
+		}
+		if c.AuthMode != "api_key" {
+			return errors.New("不支持的凭据方式")
+		}
 	}
 	c.MessagesBaseURL = strings.TrimRight(strings.TrimSpace(c.MessagesBaseURL), "/")
 	if c.SupportsMessages {
@@ -186,7 +196,7 @@ func (s *Server) channels() ([]Channel, error) {
 		if e = rows.Scan(&c.ID, &c.Name, &c.BaseURL, &c.APIKey, &c.Model, &c.RemoteModel, &c.Enabled, &c.Paid, &c.AutoPaid, &c.Priority, &c.Kind, &c.SupportsTools, &c.SupportsImages, &c.SupportsResponses, &c.SupportsMessages, &c.MessagesBaseURL, &c.AuthMode); e != nil {
 			return nil, e
 		}
-		c.HasKey = c.APIKey != ""
+		c.HasKey = c.APIKey != "" && c.Kind != "dimagent"
 		cs = append(cs, c)
 	}
 	return cs, rows.Err()
@@ -208,8 +218,9 @@ func (s *Server) Handler(webDir string) http.Handler {
 			return
 		}
 		for i := range cs {
-			if cs[i].AuthMode == "cli_oauth" {
+			if cs[i].Kind == "dimagent" {
 				cs[i].AuthState, cs[i].AuthMessage = dimAuthState()
+				cs[i].HasKey = false
 			}
 			cs[i].APIKey = ""
 		}
@@ -312,7 +323,7 @@ func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		catalogURL := c.BaseURL + "/models"
-		if c.AuthMode == "cli_oauth" {
+		if c.Kind == "dimagent" {
 			catalogURL += "?type=dim"
 		}
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, catalogURL, nil)

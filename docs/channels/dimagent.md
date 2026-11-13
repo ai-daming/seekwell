@@ -1,14 +1,14 @@
 # DimAgent 渠道
 
-SeekWell 可以通过本机 CLI 授权或用户自建的 API token，把 dimagent.cn 当作一个上游来源，使用该账号的 Credits 调用其提供的 DeepSeek 模型。渠道类型选择 `DimAgent`，API 根地址默认为 `https://dimagent.cn/v1`。
+SeekWell 通过本机 CLI 授权，把 dimagent.cn 当作一个上游来源，使用该账号的 Credits 调用其提供的 DeepSeek 模型。渠道类型选择 `DimAgent`，API 根地址默认为 `https://dimagent.cn/v1`。
 
 > **已做真实账号验证，自动刷新仍待自然过期验收。** 2026-11-13 使用 CLI 0.5.27 和 Nano 套餐验证模型目录、非流式、流式以及工具调用续答。结果与账号、套餐和上游策略有关。
 
 ## 令牌获取
 
-推荐使用 **本机 CLI 授权**：安装官方 `dimcode` CLI，使用 `dim auth login` 完成浏览器或设备授权，在渠道的凭据方式中选择「使用本机 DimAgent 授权」。SeekWell 读取 CLI 的 `$DIMCODE_HOME/auth.json`（默认 `~/.dimcode/v2/auth.json`），令牌临近过期时调用 `dim auth refresh`，不直接写授权文件。SeekWell 须与 CLI 使用相同系统账号、`DIMCODE_HOME`，且服务进程的 PATH 必须能找到 `dim`。
+DimAgent 渠道只使用 **本机 CLI 授权**，不提供 API Key 填写。安装官方 `dimcode` CLI，使用 `dim auth login` 完成浏览器或设备授权；SeekWell 读取 CLI 的 `$DIMCODE_HOME/auth.json`（默认 `~/.dimcode/v2/auth.json`），令牌临近过期时调用 `dim auth refresh`，不直接写授权文件。SeekWell 须与 CLI 使用相同系统账号、`DIMCODE_HOME`，且服务进程的 PATH 必须能找到 `dim`。
 
-若账号的控制台设置中提供 API tokens，也可创建 token，选择「填 API Key」使用。不同套餐的权限可能不同，请以实际控制台为准。
+从旧版本升级时，存量 `dimagent + api_key` 渠道会自动切换为本机授权并清除旧 Key；旧 Key 不再可用，使用前需先运行 `dim auth login`。未登录时仍可保存渠道，渠道列表会提示授权文件缺失，实际请求时才返回授权错误。
 
 CLI OAuth 凭据受官方客户端限制：该模式按 CLI 0.5.27 的公开请求格式发送客户端标识，模型目录请求带 `?type=dim`。上游政策或客户端协议变化可能导致接入失效。
 

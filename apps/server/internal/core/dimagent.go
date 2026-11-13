@@ -80,7 +80,7 @@ func dimAuthState() (string, string) {
 	return "ok", ""
 }
 func (s *Server) credential(c Channel) (string, error) {
-	if c.AuthMode != "cli_oauth" {
+	if c.Kind != "dimagent" {
 		return c.APIKey, nil
 	}
 	tok, err := readDimAuth()
@@ -131,7 +131,7 @@ func (s *Server) credential(c Channel) (string, error) {
 
 // DimAgent's OAuth relay recognizes requests using the CLI's public identity headers.
 func applyDimOAuthHeaders(req *http.Request, c Channel) {
-	if c.Kind != "dimagent" || c.AuthMode != "cli_oauth" {
+	if c.Kind != "dimagent" {
 		return
 	}
 	req.Header.Set("User-Agent", "DimAgent/0.5.27")

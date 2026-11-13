@@ -79,7 +79,11 @@ export default function App() {
 
   function edit(channel: Channel) {
     setEditing(channel.id);
-    setDraft({ ...channel, api_key: '' });
+    setDraft({
+      ...channel,
+      auth_mode: channel.kind === 'dimagent' ? 'cli_oauth' : channel.auth_mode,
+      api_key: '',
+    });
     setError('');
     setModal(true);
   }
@@ -95,7 +99,8 @@ export default function App() {
     setDraft((current) => ({
       ...current,
       kind,
-      auth_mode: dimAgent ? current.auth_mode : 'api_key',
+      auth_mode: dimAgent ? 'cli_oauth' : 'api_key',
+      api_key: dimAgent ? '' : current.api_key,
       base_url: official
         ? 'https://api.deepseek.com/v1'
         : openCodeGo

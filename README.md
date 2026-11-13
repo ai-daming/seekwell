@@ -27,7 +27,7 @@ go run ./cmd/seekwell
 
 访问 <http://127.0.0.1:8350>。服务默认只监听本机；`SEEKWELL_DATA` 可指定数据目录，`SEEKWELL_WEB` 可指定前端构建目录。默认数据目录为 `apps/server/data`；SQLite 数据库包括渠道凭据，请按敏感配置保护和备份。
 
-在界面添加渠道，填写包含 `/v1` 的 API 根地址、凭据、统一模型名和上游模型名（DimAgent 也可使用本机 CLI 授权）。OpenCode Go 与 DimAgent 均可直接选择对应渠道类型，详见 [OpenCode Go 渠道说明](docs/channels/opencode-go.md) 与 [DimAgent 渠道说明](docs/channels/dimagent.md)。名称都应包含 `deepseek`。根据真实上游确认并勾选工具调用、图片、Responses 和 Messages 能力，未勾选时对应请求不会被路由到该渠道。同一个统一模型可以配置多个渠道，数字较小的优先。官方搜索和付费模型如需自动调用，要勾选「允许自动使用此付费渠道」。
+在界面添加渠道，填写包含 `/v1` 的 API 根地址、凭据、统一模型名和上游模型名（DimAgent 使用本机 CLI 授权，不需要 API Key）。OpenCode Go 与 DimAgent 均可直接选择对应渠道类型，详见 [OpenCode Go 渠道说明](docs/channels/opencode-go.md) 与 [DimAgent 渠道说明](docs/channels/dimagent.md)。名称都应包含 `deepseek`。根据真实上游确认并勾选工具调用、图片、Responses 和 Messages 能力，未勾选时对应请求不会被路由到该渠道。同一个统一模型可以配置多个渠道，数字较小的优先。官方搜索和付费模型如需自动调用，要勾选「允许自动使用此付费渠道」。
 
 在管理界面的「访问 Key」中创建 Key，客户端使用该 Key 访问 `/v1`。
 
