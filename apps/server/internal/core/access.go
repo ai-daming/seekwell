@@ -153,19 +153,47 @@ func (s *Server) authenticateAPI(next http.Handler) http.Handler {
 }
 func (s *Server) recordAccess(id int64, path string, status int, start time.Time, c *usageWriter) {
 	c.finish()
-	var in, out any
+	var in, out, cacheHit, cacheMiss any
 	if c.hasInput {
 		in = c.input
 	}
 	if c.hasOutput {
 		out = c.output
 	}
-	_, _ = s.db.Exec(`INSERT INTO access_requests(key_id,created_at,path,status,duration_ms,input_tokens,output_tokens) VALUES(?,?,?,?,?,?,?)`, id, time.Now().UTC().Format(time.RFC3339), path, status, time.Since(start).Milliseconds(), in, out)
+	_, _, hit, miss := c.normalized()
+	if hit != nil {
+		cacheHit = *hit
+	}
+	if miss != nil {
+		cacheMiss = *miss
+	}
+	price := s.priceAttempt(c.channelKind, c.channelModel, status, start, &c.usageTotals)
+	var cost, period, pricingModel, pricingVersion any
+	if price.CostNano != nil {
+		cost = *price.CostNano
+		period = price.Period
+		pricingModel = price.Model
+		pricingVersion = price.Version
+	}
+	var model, channel, kind any
+	if c.channelModel != "" {
+		model = c.channelModel
+	}
+	if c.channelName != "" {
+		channel = c.channelName
+	}
+	if c.channelKind != "" {
+		kind = c.channelKind
+	}
+	_, _ = s.db.Exec(`INSERT INTO access_requests(key_id,created_at,path,status,duration_ms,input_tokens,output_tokens,cache_hit_tokens,cache_miss_tokens,model,channel,kind,cost_nano_cny,price_period,pricing_model,pricing_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, time.Now().UTC().Format(time.RFC3339), path, status, time.Since(start).Milliseconds(), in, out, cacheHit, cacheMiss, model, channel, kind, cost, period, pricingModel, pricingVersion)
 }
 
 type usageWriter struct {
 	http.ResponseWriter
-	status int
+	status       int
+	channelKind  string
+	channelModel string
+	channelName  string
 	usageCapture
 }
 

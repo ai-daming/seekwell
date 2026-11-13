@@ -9,14 +9,17 @@ import (
 // UsageTotals is the shared counting shape for overall, per-key and daily
 // access usage. Token fields stay null when the upstream never returned them.
 type UsageTotals struct {
-	RequestCount      int64  `json:"request_count"`
-	SuccessCount      int64  `json:"success_count"`
-	FailureCount      int64  `json:"failure_count"`
-	UsageKnownCount   int64  `json:"usage_known_count"`
-	UsageUnknownCount int64  `json:"usage_unknown_count"`
-	InputTokens       *int64 `json:"input_tokens"`
-	OutputTokens      *int64 `json:"output_tokens"`
-	TotalTokens       *int64 `json:"total_tokens"`
+	RequestCount      int64    `json:"request_count"`
+	SuccessCount      int64    `json:"success_count"`
+	FailureCount      int64    `json:"failure_count"`
+	UsageKnownCount   int64    `json:"usage_known_count"`
+	UsageUnknownCount int64    `json:"usage_unknown_count"`
+	InputTokens       *int64   `json:"input_tokens"`
+	OutputTokens      *int64   `json:"output_tokens"`
+	TotalTokens       *int64   `json:"total_tokens"`
+	CostCNY           *float64 `json:"cost_cny"`
+	CostKnownCount    int64    `json:"cost_known_count"`
+	CostUnknownCount  int64    `json:"cost_unknown_count"`
 }
 
 type OverallUsage struct {
@@ -45,6 +48,7 @@ type UsageStats struct {
 	Overall OverallUsage `json:"overall"`
 	Keys    []KeyUsage   `json:"keys"`
 	Daily   []DailyUsage `json:"daily"`
+	Pricing PricingInfo  `json:"pricing"`
 }
 
 func usageTotalTokens(input, output *int64) *int64 {
@@ -61,8 +65,8 @@ func usageTotalTokens(input, output *int64) *int64 {
 	return &total
 }
 
-func newUsageTotals(requestCount, successCount, knownCount int64, input, output *int64) UsageTotals {
-	return UsageTotals{
+func newUsageTotals(requestCount, successCount, knownCount int64, input, output *int64, costNano *int64, costKnownCount int64) UsageTotals {
+	totals := UsageTotals{
 		RequestCount:      requestCount,
 		SuccessCount:      successCount,
 		FailureCount:      requestCount - successCount,
@@ -71,7 +75,14 @@ func newUsageTotals(requestCount, successCount, knownCount int64, input, output 
 		InputTokens:       input,
 		OutputTokens:      output,
 		TotalTokens:       usageTotalTokens(input, output),
+		CostKnownCount:    costKnownCount,
+		CostUnknownCount:  requestCount - costKnownCount,
 	}
+	if costKnownCount > 0 && costNano != nil {
+		cost := nanoToCNY(*costNano)
+		totals.CostCNY = &cost
+	}
+	return totals
 }
 
 func nullableInt64(value sql.NullInt64) *int64 {
@@ -106,18 +117,19 @@ func (s *Server) usageStats(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, "读取使用统计失败")
 		return
 	}
-	jsonOut(w, http.StatusOK, UsageStats{Overall: overall, Keys: keys, Daily: daily})
+	jsonOut(w, http.StatusOK, UsageStats{Overall: overall, Keys: keys, Daily: daily, Pricing: s.pricingInfo()})
 }
 
 func (s *Server) overallUsage() (OverallUsage, error) {
-	var requestCount, successCount, knownCount int64
-	var input, output sql.NullInt64
+	var requestCount, successCount, knownCount, costKnownCount int64
+	var input, output, costNano sql.NullInt64
 	var lastRequestAt sql.NullString
 	err := s.db.QueryRow(`SELECT COUNT(*),
 		COALESCE(SUM(CASE WHEN status BETWEEN 200 AND 299 THEN 1 ELSE 0 END),0),
 		COALESCE(SUM(CASE WHEN input_tokens IS NOT NULL AND output_tokens IS NOT NULL THEN 1 ELSE 0 END),0),
-		SUM(input_tokens), SUM(output_tokens), MAX(created_at)
-		FROM access_requests`).Scan(&requestCount, &successCount, &knownCount, &input, &output, &lastRequestAt)
+		SUM(input_tokens), SUM(output_tokens), MAX(created_at),
+		SUM(cost_nano_cny), COUNT(cost_nano_cny)
+		FROM access_requests`).Scan(&requestCount, &successCount, &knownCount, &input, &output, &lastRequestAt, &costNano, &costKnownCount)
 	if err != nil {
 		return OverallUsage{}, err
 	}
@@ -127,7 +139,7 @@ func (s *Server) overallUsage() (OverallUsage, error) {
 		return OverallUsage{}, err
 	}
 	return OverallUsage{
-		UsageTotals:     newUsageTotals(requestCount, successCount, knownCount, nullableInt64(input), nullableInt64(output)),
+		UsageTotals:     newUsageTotals(requestCount, successCount, knownCount, nullableInt64(input), nullableInt64(output), nullableInt64(costNano), costKnownCount),
 		KeyCount:        keyCount,
 		EnabledKeyCount: enabledKeyCount,
 		LastRequestAt:   nullableString(lastRequestAt),
@@ -139,7 +151,8 @@ func (s *Server) keyUsage() ([]KeyUsage, error) {
 		COUNT(r.id),
 		COALESCE(SUM(CASE WHEN r.status BETWEEN 200 AND 299 THEN 1 ELSE 0 END),0),
 		COALESCE(SUM(CASE WHEN r.input_tokens IS NOT NULL AND r.output_tokens IS NOT NULL THEN 1 ELSE 0 END),0),
-		SUM(r.input_tokens), SUM(r.output_tokens), MAX(r.created_at)
+		SUM(r.input_tokens), SUM(r.output_tokens), MAX(r.created_at),
+		SUM(r.cost_nano_cny), COUNT(r.cost_nano_cny)
 		FROM access_keys k LEFT JOIN access_requests r ON r.key_id=k.id
 		GROUP BY k.id
 		ORDER BY COUNT(r.id) DESC, k.id ASC`)
@@ -151,14 +164,14 @@ func (s *Server) keyUsage() ([]KeyUsage, error) {
 	out := []KeyUsage{}
 	for rows.Next() {
 		var item KeyUsage
-		var requestCount, successCount, knownCount int64
-		var input, output sql.NullInt64
+		var requestCount, successCount, knownCount, costKnownCount int64
+		var input, output, costNano sql.NullInt64
 		var lastRequestAt sql.NullString
 		if err = rows.Scan(&item.ID, &item.Name, &item.Prefix, &item.Enabled, &item.CreatedAt,
-			&requestCount, &successCount, &knownCount, &input, &output, &lastRequestAt); err != nil {
+			&requestCount, &successCount, &knownCount, &input, &output, &lastRequestAt, &costNano, &costKnownCount); err != nil {
 			return nil, err
 		}
-		item.UsageTotals = newUsageTotals(requestCount, successCount, knownCount, nullableInt64(input), nullableInt64(output))
+		item.UsageTotals = newUsageTotals(requestCount, successCount, knownCount, nullableInt64(input), nullableInt64(output), nullableInt64(costNano), costKnownCount)
 		item.LastRequestAt = nullableString(lastRequestAt)
 		out = append(out, item)
 	}
@@ -169,13 +182,15 @@ func (s *Server) keyUsage() ([]KeyUsage, error) {
 }
 
 type dailyUsageAccumulator struct {
-	requestCount int64
-	successCount int64
-	knownCount   int64
-	input        int64
-	output       int64
-	hasInput     bool
-	hasOutput    bool
+	requestCount   int64
+	successCount   int64
+	knownCount     int64
+	input          int64
+	output         int64
+	hasInput       bool
+	hasOutput      bool
+	costNano       int64
+	costKnownCount int64
 }
 
 func (s *Server) dailyUsage() ([]DailyUsage, error) {
@@ -183,7 +198,7 @@ func (s *Server) dailyUsage() ([]DailyUsage, error) {
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
 	start := today.AddDate(0, 0, -6)
 	end := today.AddDate(0, 0, 1)
-	rows, err := s.db.Query(`SELECT created_at,status,input_tokens,output_tokens FROM access_requests WHERE created_at>=? AND created_at<?`,
+	rows, err := s.db.Query(`SELECT created_at,status,input_tokens,output_tokens,cost_nano_cny FROM access_requests WHERE created_at>=? AND created_at<?`,
 		start.UTC().Format(time.RFC3339), end.UTC().Format(time.RFC3339))
 	if err != nil {
 		return nil, err
@@ -194,8 +209,8 @@ func (s *Server) dailyUsage() ([]DailyUsage, error) {
 	for rows.Next() {
 		var createdAt string
 		var status int
-		var input, output sql.NullInt64
-		if err = rows.Scan(&createdAt, &status, &input, &output); err != nil {
+		var input, output, costNano sql.NullInt64
+		if err = rows.Scan(&createdAt, &status, &input, &output, &costNano); err != nil {
 			return nil, err
 		}
 		at, parseErr := time.Parse(time.RFC3339, createdAt)
@@ -223,6 +238,10 @@ func (s *Server) dailyUsage() ([]DailyUsage, error) {
 		if input.Valid && output.Valid {
 			item.knownCount++
 		}
+		if costNano.Valid {
+			item.costNano += costNano.Int64
+			item.costKnownCount++
+		}
 	}
 	if err = rows.Err(); err != nil {
 		return nil, err
@@ -233,7 +252,7 @@ func (s *Server) dailyUsage() ([]DailyUsage, error) {
 		date := start.AddDate(0, 0, i).Format("2006-01-02")
 		item := acc[date]
 		if item == nil {
-			out = append(out, DailyUsage{Date: date, UsageTotals: newUsageTotals(0, 0, 0, nil, nil)})
+			out = append(out, DailyUsage{Date: date, UsageTotals: newUsageTotals(0, 0, 0, nil, nil, nil, 0)})
 			continue
 		}
 		var input, output *int64
@@ -245,9 +264,14 @@ func (s *Server) dailyUsage() ([]DailyUsage, error) {
 			value := item.output
 			output = &value
 		}
+		var cost *int64
+		if item.costKnownCount > 0 {
+			value := item.costNano
+			cost = &value
+		}
 		out = append(out, DailyUsage{
 			Date:        date,
-			UsageTotals: newUsageTotals(item.requestCount, item.successCount, item.knownCount, input, output),
+			UsageTotals: newUsageTotals(item.requestCount, item.successCount, item.knownCount, input, output, cost, item.costKnownCount),
 		})
 	}
 	return out, nil

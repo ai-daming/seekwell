@@ -61,6 +61,8 @@ export type Entry = {
   output_tokens: number | null;
   cache_hit_tokens: number | null;
   cache_miss_tokens: number | null;
+  cost_cny: number | null;
+  price_period: 'peak' | 'offpeak' | null;
 };
 
 export type SpeedTestResult = {
@@ -129,6 +131,9 @@ export type AccessUsageTotals = {
   input_tokens: number | null;
   output_tokens: number | null;
   total_tokens: number | null;
+  cost_cny: number | null;
+  cost_known_count: number;
+  cost_unknown_count: number;
 };
 
 export type UsageOverall = AccessUsageTotals & {
@@ -150,8 +155,23 @@ export type UsageDaily = AccessUsageTotals & {
   date: string;
 };
 
+export type UsagePricing = {
+  currency: string;
+  unit: string;
+  source: 'bundled' | 'remote' | string;
+  source_url: string;
+  last_sync_at: string | null;
+  last_sync_ok: boolean;
+  stale: boolean;
+  warning: string;
+  peak_timezone: string;
+  peak_windows: string[];
+  holiday_years: number[];
+};
+
 export type UsageStats = {
   overall: UsageOverall;
   keys: UsageKeyStats[];
   daily: UsageDaily[];
+  pricing: UsagePricing;
 };

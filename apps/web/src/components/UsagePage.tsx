@@ -1,6 +1,7 @@
 import { copy } from '../copy';
-import type { UsageDaily, UsageKeyStats, UsageStats } from '../types';
+import type { UsageDaily, UsageKeyStats, UsagePricing, UsageStats } from '../types';
 import { Icon } from './Icon';
+import { formatCost } from './format';
 import './Channels.css';
 import './UsagePage.css';
 
@@ -86,7 +87,7 @@ function DailyBars({ daily }: { daily: UsageDaily[] }) {
             {formatCount(day.request_count)} {copy.usageRequestColumn}
           </span>
           <span className="usage-day__tokens">
-            {copy.usageTotalTokenColumn} {formatNumber(day.total_tokens)}
+            {copy.usageTotalTokenColumn} {formatNumber(day.total_tokens)} · {copy.usageCostColumn} {formatCost(day.cost_cny)}
           </span>
         </div>
       ))}
@@ -119,11 +120,43 @@ function KeyRow({ item }: { item: UsageKeyStats }) {
       </td>
       <td className="usage-numeric">{formatNumber(item.total_tokens)}</td>
       <td className="usage-numeric">
+        {formatCost(item.cost_cny)}
+        <small className="cell-sub">
+          {copy.usageCostKnown} {formatCount(item.cost_known_count)} / {formatCount(item.request_count)}
+        </small>
+      </td>
+      <td className="usage-numeric">
         {formatCount(item.usage_known_count)} / {formatCount(item.request_count)}
         <small className="cell-sub">{copy.usageUnknown} {formatCount(item.usage_unknown_count)}</small>
       </td>
       <td className="usage-time">{formatTime(item.last_request_at)}</td>
     </tr>
+  );
+}
+
+function PricingNotes({ pricing }: { pricing: UsagePricing }) {
+  const year = Number(
+    new Date().toLocaleString('en-US', { timeZone: pricing.peak_timezone, year: 'numeric' }),
+  );
+  const holidayCovered = pricing.holiday_years.includes(year);
+  const warning = pricing.stale || !pricing.last_sync_ok;
+  return (
+    <div className={`usage-pricing${warning ? ' usage-pricing--warning' : ''}`}>
+      <p>{copy.usagePricingEstimate}</p>
+      <p>{copy.usagePricingExclusions}</p>
+      <p>{copy.usageCostUnknown}</p>
+      <p>
+        {copy.usagePricingSnapshot}：
+        {pricing.source === 'bundled'
+          ? copy.usagePricingBundled
+          : formatTime(pricing.last_sync_at)}
+        {pricing.stale ? ` · ${copy.usagePricingStale}` : ''}
+        {` · ${copy.usagePricingPeakRule}`}
+      </p>
+      {!pricing.last_sync_ok && <p>{copy.usagePricingSyncFailed}</p>}
+      {pricing.warning && <p>{pricing.warning}</p>}
+      {!holidayCovered && <p>{copy.usageHolidayUncovered}</p>}
+    </div>
   );
 }
 
@@ -185,11 +218,18 @@ export function UsagePage({ stats, loading, error, onRetry, onGoToKeys }: UsageP
               note={`${copy.usageUnknown} ${formatCount(stats.overall.usage_unknown_count)}`}
             />
             <Metric
+              label={copy.usageCost}
+              value={formatCost(stats.overall.cost_cny)}
+              note={`${copy.usageCostKnown} ${formatCount(stats.overall.cost_known_count)} / ${formatCount(stats.overall.request_count)} · ${copy.usageUnknown} ${formatCount(stats.overall.cost_unknown_count)}`}
+            />
+            <Metric
               label={copy.usageActiveKeys}
               value={`${formatCount(stats.overall.enabled_key_count)} / ${formatCount(stats.overall.key_count)}`}
               note={`${formatCount(stats.overall.enabled_key_count)} ${copy.usageEnabled}`}
             />
           </div>
+
+          <PricingNotes pricing={stats.pricing} />
 
           <section className="usage-section">
             <div className="section-head">
@@ -234,6 +274,7 @@ export function UsagePage({ stats, loading, error, onRetry, onGoToKeys }: UsageP
                       <th>{copy.usageSuccessRate}</th>
                       <th>{copy.usageInputOutput}</th>
                       <th>{copy.usageTotalTokenColumn}</th>
+                      <th>{copy.usageCostColumn}</th>
                       <th>{copy.usageUsageKnown}</th>
                       <th>{copy.usageLastRequest}</th>
                     </tr>
