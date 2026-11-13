@@ -1,5 +1,5 @@
 import { copy } from '../copy';
-import type { Channel } from '../types';
+import type { Channel, ChannelUsage } from '../types';
 import { ChannelsTable } from './ChannelsTable';
 import { Icon } from './Icon';
 import './Overview.css';
@@ -11,6 +11,9 @@ type OverviewProps = {
   loading: boolean;
   discovering: number | null;
   speeding: number | null;
+  usage?: Record<number, ChannelUsage>;
+  usageLoading?: boolean;
+  usageError?: string;
   onAdd: () => void;
   onManage: () => void;
   onDiscover: (channel: Channel) => void;
@@ -27,6 +30,9 @@ export function Overview({
   loading,
   discovering,
   speeding,
+  usage = {},
+  usageLoading = false,
+  usageError = '',
   onAdd,
   onManage,
   onDiscover,
@@ -95,6 +101,9 @@ export function Overview({
             compact
             discovering={discovering}
             speeding={speeding}
+            usage={usage}
+            usageLoading={usageLoading}
+            usageError={usageError}
             onAdd={onAdd}
             onDiscover={onDiscover}
             onSpeedTest={onSpeedTest}

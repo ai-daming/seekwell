@@ -36,7 +36,13 @@ DimAgent 的模型目录同时包含 DeepSeek 与非 DeepSeek 模型。SeekWell 
 
 ## 计费与自动调用
 
-DimAgent 使用预付 Credits，余额只在 dimagent.cn 账户中心查看。新渠道默认是付费渠道，且「允许自动使用此付费渠道」未勾选；不勾选时请求不会自动路由到该渠道，勾选后才参与自动调用。SeekWell 不查询余额、不记录费用。
+DimAgent 使用预付 Credits。新渠道默认是付费渠道，且「允许自动使用此付费渠道」未勾选；不勾选时请求不会自动路由到该渠道，勾选后才参与自动调用。SeekWell 只读查询并展示 Credits 剩余 / 总额 / 已用、套餐到期时间和窗口 token 用量，不记录费用，也不据此限制路由；额度与账单仍以 dimagent.cn 账户中心为准。
+
+## 用量查询
+
+渠道列表加载后，SeekWell 复用本机 CLI OAuth 令牌，只读请求 `GET https://dimagent.cn/api/me/usage`，展示套餐 Credits、到期时间和窗口 token 用量。仅当渠道 BaseURL 的 host 为 `dimagent.cn`（或 `www.dimagent.cn`）且使用 HTTPS 时才发送令牌；自定义兼容网关显示为不支持查询，令牌不会发往该地址。
+
+授权文件缺失、过期或刷新失败时，用量列显示可操作的登录提示，不影响渠道列表、编辑、启停或实际转发。该端点来自 CLI 的账号用量实现，不是公开稳定的 API 文档，可能随上游调整；失败或格式变化时显示不可查询及原因，不伪造数据。用量查询不发起模型推理、不写调用记录、不改变路由或付费开关。
 
 ## 能力待实测
 
@@ -51,7 +57,7 @@ DimAgent 使用预付 Credits，余额只在 dimagent.cn 账户中心查看。�
 
 DimAgent 没有与 DeepSeek 官方一致的 `/v1/tools/search`、`/v1/tools/fetch` 接口。SeekWell 的 Search / Fetch 仍然只使用渠道类型为「DeepSeek 官方」的渠道；把 DimAgent 配成该类型不会让搜索走它。
 
-非目标：不通过 DimAgent 接收 GLM、Step、MiMo、Gemini 等非 DeepSeek 模型，不在 SeekWell 内发起 DimAgent 账号登录或查询 Credits 余额，不做跨协议转换。
+非目标：不通过 DimAgent 接收 GLM、Step、MiMo、Gemini 等非 DeepSeek 模型，不在 SeekWell 内发起 DimAgent 账号登录，不做跨协议转换。
 
 ## 验证记录
 

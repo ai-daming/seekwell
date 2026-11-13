@@ -1,5 +1,5 @@
 import { copy } from '../copy';
-import { kindLabel, type Channel } from '../types';
+import { kindLabel, type Channel, type ChannelUsage, type UsageWindow } from '../types';
 import { Icon } from './Icon';
 import './Channels.css';
 
@@ -8,6 +8,9 @@ type ChannelsTableProps = {
   compact?: boolean;
   discovering: number | null;
   speeding: number | null;
+  usage?: Record<number, ChannelUsage>;
+  usageLoading?: boolean;
+  usageError?: string;
   onAdd: () => void;
   onDiscover: (channel: Channel) => void;
   onSpeedTest: (channel: Channel) => void;
@@ -16,11 +19,193 @@ type ChannelsTableProps = {
   onRemove: (channel: Channel) => void;
 };
 
+function formatNumber(value: number): string {
+  return value.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+}
+
+function formatDate(value?: string): string {
+  if (!value) return '';
+  try {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleString('zh-CN');
+  } catch {
+    return '';
+  }
+}
+
+function truncateMessage(value?: string): string {
+  const text = (value ?? '').trim();
+  if (text.length <= 140) return text;
+  return `${text.slice(0, 140)}…`;
+}
+
+function windowLabel(window?: string): string {
+  if (window === 'five_hour') return copy.usageFiveHour;
+  if (window === 'weekly') return copy.usageWeekly;
+  if (window === 'monthly') return copy.usageMonthly;
+  return copy.usageUnknown;
+}
+
+function nextReset(windows: UsageWindow[]): string | undefined {
+  const now = Date.now();
+  let best = Number.POSITIVE_INFINITY;
+  let result: string | undefined;
+  for (const window of windows) {
+    if (!window.resets_at) continue;
+    try {
+      const time = new Date(window.resets_at).getTime();
+      if (Number.isFinite(time) && time > now && time < best) {
+        best = time;
+        result = window.resets_at;
+      }
+    } catch {
+      // Ignore an invalid reset timestamp and keep the other windows.
+    }
+  }
+  return result;
+}
+
+function OpenCodeUsage({ usage }: { usage: ChannelUsage }) {
+  const windows = usage.windows ?? [];
+  const reset = nextReset(windows);
+  if (windows.length === 0) {
+    return <span className="cell-value">{copy.usageUnknown}</span>;
+  }
+  return (
+    <div className="usage-lines">
+      {windows.map((window, index) => (
+        <span className="usage-line" key={`${window.window ?? 'window'}-${index}`}>
+          {windowLabel(window.window)}{' '}
+          {window.used_percent === undefined || window.used_percent === null
+            ? copy.usageUnknown
+            : `${formatNumber(window.used_percent)}%`}
+        </span>
+      ))}
+      {reset && <small className="cell-sub">{copy.usageReset} {formatDate(reset)}</small>}
+    </div>
+  );
+}
+
+function DimAgentUsage({ usage }: { usage: ChannelUsage }) {
+  const credits = usage.credits;
+  if (!credits) {
+    return <span className="cell-value">{copy.usageUnknown}</span>;
+  }
+  const unlimited = credits.unlimited === true;
+  const remaining = credits.remaining;
+  const total = credits.total;
+  const used = credits.used;
+  const usedPercent =
+    !unlimited && total !== undefined && total > 0 && used !== undefined ? (used / total) * 100 : undefined;
+
+  let primary = `${copy.usageCredits} ${copy.usageUnknown}`;
+  if (unlimited) {
+    primary = `${copy.usageCredits} ${copy.usageUnlimited}`;
+  } else if (remaining !== undefined) {
+    primary = `${copy.usageCredits} 剩余 ${formatNumber(remaining)}${total !== undefined ? ` / ${formatNumber(total)}` : ''}`;
+  } else if (total !== undefined) {
+    primary = `${copy.usageCredits} 总额 ${formatNumber(total)}`;
+  }
+
+  const windows = usage.windows ?? [];
+  return (
+    <div className="usage-lines">
+      <span className="usage-line">{primary}</span>
+      {(used !== undefined || usedPercent !== undefined) && (
+        <small className="cell-sub">
+          {used !== undefined ? `${copy.usageUsed} ${formatNumber(used)}` : ''}
+          {usedPercent !== undefined ? `${used !== undefined ? ' · ' : ''}${formatNumber(usedPercent)}%` : ''}
+        </small>
+      )}
+      {credits.expires_at && (
+        <small className="cell-sub">{copy.usageExpires} {formatDate(credits.expires_at)}</small>
+      )}
+      {windows.map((window, index) => {
+        const hours = window.duration_hours !== undefined ? `${formatNumber(window.duration_hours)} 小时` : copy.usageUnknown;
+        const usedTokens = window.token_used !== undefined ? formatNumber(window.token_used) : copy.usageUnknown;
+        const capTokens = window.token_cap !== undefined ? formatNumber(window.token_cap) : copy.usageUnknown;
+        const reset = formatDate(window.resets_at);
+        return (
+          <small className="cell-sub" key={`dim-window-${index}`}>
+            {hours} {usedTokens} / {capTokens} {copy.usageTokenUnit}
+            {reset ? ` · ${copy.usageReset} ${reset}` : ''}
+          </small>
+        );
+      })}
+    </div>
+  );
+}
+
+function UsageCell({
+  channel,
+  usage,
+  loading,
+  error,
+}: {
+  channel: Channel;
+  usage?: ChannelUsage;
+  loading: boolean;
+  error: string;
+}) {
+  const queryable = channel.kind === 'opencode_go' || channel.kind === 'dimagent';
+  if (!usage) {
+    if (queryable && loading) {
+      return <span className="cell-value">{copy.usageLoading}</span>;
+    }
+    if (queryable && error) {
+      return (
+        <div className="usage-lines">
+          <span className="cell-value">{copy.usageUnavailable}</span>
+          <small className="cell-sub usage-cell__message">{truncateMessage(error)}</small>
+        </div>
+      );
+    }
+    return (
+      <div className="usage-lines">
+        <span className="cell-value">—</span>
+        <small className="cell-sub">{copy.usageUnsupported}</small>
+      </div>
+    );
+  }
+  if (usage.status === 'unsupported') {
+    return (
+      <div className="usage-lines">
+        <span className="cell-value">—</span>
+        <small className="cell-sub">{copy.usageCustomUnsupported}</small>
+      </div>
+    );
+  }
+  if (usage.status === 'error') {
+    return (
+      <div className="usage-lines">
+        <span className="cell-value">{copy.usageUnavailable}</span>
+        <small className="cell-sub usage-cell__message">{truncateMessage(usage.message) || copy.usageUnknown}</small>
+      </div>
+    );
+  }
+  if (usage.kind === 'opencode_go') {
+    return <OpenCodeUsage usage={usage} />;
+  }
+  if (usage.kind === 'dimagent') {
+    return <DimAgentUsage usage={usage} />;
+  }
+  return (
+    <div className="usage-lines">
+      <span className="cell-value">—</span>
+      <small className="cell-sub">{copy.usageUnsupported}</small>
+    </div>
+  );
+}
+
 export function ChannelsTable({
   channels,
   compact = false,
   discovering,
   speeding,
+  usage = {},
+  usageLoading = false,
+  usageError = '',
   onAdd,
   onDiscover,
   onSpeedTest,
@@ -54,6 +239,7 @@ export function ChannelsTable({
             <th>渠道 / 来源</th>
             <th>统一模型</th>
             <th>计费方式</th>
+            <th>用量 / 额度</th>
             <th>状态</th>
             <th>优先级</th>
             <th aria-label="操作" />
@@ -88,6 +274,14 @@ export function ChannelsTable({
                       : '自动使用已关闭'
                     : '以渠道实际规则为准'}
                 </small>
+              </td>
+              <td className="usage-cell" aria-label={copy.usageTitle}>
+                <UsageCell
+                  channel={channel}
+                  usage={usage[channel.id]}
+                  loading={usageLoading}
+                  error={usageError}
+                />
               </td>
               <td>
                 <span className={`status ${channel.enabled ? '' : 'status--off'}`}>

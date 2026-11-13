@@ -5,7 +5,7 @@ import '../base.css';
 import './App.css';
 import { api, request } from '../api';
 import { copy } from '../copy';
-import { freshDraft, type Channel, type Draft, type Entry, type AccessKey, type ModelTestProtocol, type ModelTestResult, type SpeedTestResult, type Tab } from '../types';
+import { freshDraft, type Channel, type ChannelUsage, type Draft, type Entry, type AccessKey, type ModelTestProtocol, type ModelTestResult, type SpeedTestResult, type Tab } from '../types';
 import { ActivityTable } from './ActivityTable';
 import { ChannelDialog } from './ChannelDialog';
 import { ChannelsTable } from './ChannelsTable';
@@ -22,6 +22,9 @@ export default function App() {
   const [keyName, setKeyName] = useState('');
   const [createdKey, setCreatedKey] = useState('');
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [usage, setUsage] = useState<Record<number, ChannelUsage>>({});
+  const [usageLoading, setUsageLoading] = useState(false);
+  const [usageError, setUsageError] = useState('');
   const [entries, setEntries] = useState<Entry[]>([]);
   const [tab, setTab] = useState<Tab>('overview');
   const [modal, setModal] = useState(false);
@@ -47,6 +50,20 @@ export default function App() {
   const [testDiscovering, setTestDiscovering] = useState<number | null>(null);
   const [testCatalogError, setTestCatalogError] = useState('');
 
+  async function refreshUsage() {
+    setUsageLoading(true);
+    try {
+      const data = await api.channelUsage();
+      setUsage(Object.fromEntries(data.usage.map((item) => [item.channel_id, item])));
+      setUsageError('');
+    } catch (caught) {
+      setUsage({});
+      setUsageError(caught instanceof Error ? caught.message : '用量查询失败');
+    } finally {
+      setUsageLoading(false);
+    }
+  }
+
   async function refresh(silent = false) {
     if (!silent) setLoading(true);
     try {
@@ -55,6 +72,7 @@ export default function App() {
       setChannels(nextChannels);
       setEntries(nextEntries);
       setError('');
+      void refreshUsage();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '连接失败');
     } finally {
@@ -279,6 +297,9 @@ export default function App() {
             loading={loading}
             discovering={discovering}
             speeding={speeding}
+            usage={usage}
+            usageLoading={usageLoading}
+            usageError={usageError}
             onAdd={add}
             onManage={() => setTab('channels')}
             onDiscover={(channel) => void discover(channel)}
@@ -313,6 +334,9 @@ export default function App() {
                   channels={channels}
                   discovering={discovering}
                   speeding={speeding}
+                  usage={usage}
+                  usageLoading={usageLoading}
+                  usageError={usageError}
                   onAdd={add}
                   onDiscover={(channel) => void discover(channel)}
                   onSpeedTest={(channel) => void speedTest(channel)}

@@ -272,6 +272,7 @@ func (s *Server) Handler(webDir string) http.Handler {
 		}
 		w.WriteHeader(204)
 	})
+	m.HandleFunc("GET /api/channels/usage", s.channelUsage)
 	m.HandleFunc("GET /api/requests", s.history)
 	m.HandleFunc("GET /api/keys", s.listKeys)
 	m.HandleFunc("POST /api/keys", s.createKey)
