@@ -55,6 +55,9 @@ type Server struct {
 	pricingClient *http.Client
 	pricingURL    string
 	now           func() time.Time
+
+	quotaProbeInterval time.Duration
+	quotaProbeAsync    func(int64)
 }
 type sessionBinding struct {
 	channel int64
@@ -129,6 +132,16 @@ func New(path string) (*Server, error) {
 		db.Close()
 		return nil, err
 	}
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS quota_states (channel_id INTEGER PRIMARY KEY, probe_mode TEXT NOT NULL, next_probe_at TEXT NOT NULL, reset_at TEXT NOT NULL DEFAULT '', probe_failures INTEGER NOT NULL DEFAULT 0, last_checked_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0)`)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	_, err = db.Exec(`DELETE FROM quota_states WHERE channel_id NOT IN (SELECT id FROM channels)`)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
 	for _, column := range []string{"cache_hit_tokens", "cache_miss_tokens", "cost_nano_cny"} {
 		var count int
 		if err = db.QueryRow(`SELECT count(*) FROM pragma_table_info('access_requests') WHERE name=?`, column).Scan(&count); err == nil && count == 0 {
@@ -163,7 +176,11 @@ func New(path string) (*Server, error) {
 		return nil, err
 	}
 	_ = os.Chmod(path, 0600)
-	return &Server{db: db, client: &http.Client{Timeout: 5 * time.Minute}, speedTimeout: 30 * time.Second, testTimeout: 60 * time.Second, sessions: make(map[string]sessionBinding), pricing: pricing, pricingClient: &http.Client{Timeout: pricingSyncTimeout}, pricingURL: pricingURL, now: time.Now}, nil
+	s := &Server{db: db, client: &http.Client{Timeout: 5 * time.Minute}, speedTimeout: 30 * time.Second, testTimeout: 60 * time.Second, sessions: make(map[string]sessionBinding), pricing: pricing, pricingClient: &http.Client{Timeout: pricingSyncTimeout}, pricingURL: pricingURL, quotaProbeInterval: quotaProbeIntervalFromEnv(), now: time.Now}
+	s.quotaProbeAsync = func(id int64) {
+		go func() { _ = s.probeQuotaState(context.Background(), id) }()
+	}
+	return s, nil
 }
 func (s *Server) Close() error { return s.db.Close() }
 func validModel(v string) bool {
@@ -222,14 +239,20 @@ func (s *Server) SaveChannel(c *Channel) error {
 		c.ID, e = r.LastInsertId()
 		return e
 	}
+	var oldKind, oldBaseURL, oldAPIKey, oldAuthMode, oldMessagesBaseURL string
+	if err := s.db.QueryRow(`SELECT kind,base_url,api_key,auth_mode,messages_base_url FROM channels WHERE id=?`, c.ID).Scan(&oldKind, &oldBaseURL, &oldAPIKey, &oldAuthMode, &oldMessagesBaseURL); err != nil {
+		return errors.New("渠道不存在")
+	}
 	if c.AuthMode == "api_key" && c.APIKey == "" {
-		var oldMode, oldKey string
-		if err := s.db.QueryRow(`SELECT auth_mode,api_key FROM channels WHERE id=?`, c.ID).Scan(&oldMode, &oldKey); err != nil {
-			return errors.New("渠道不存在")
-		}
-		if oldMode != "api_key" || oldKey == "" {
+		if oldAuthMode != "api_key" || oldAPIKey == "" {
 			return errors.New("请输入 API Key")
 		}
+	}
+	effectiveKey := c.APIKey
+	if c.AuthMode == "cli_oauth" {
+		effectiveKey = ""
+	} else if c.APIKey == "" {
+		effectiveKey = oldAPIKey
 	}
 	result, e := s.db.Exec(`UPDATE channels SET name=?,base_url=?,api_key=CASE WHEN ?='cli_oauth' THEN '' WHEN ?='' AND auth_mode='api_key' THEN api_key ELSE ? END,model=?,remote_model=?,enabled=?,paid=?,auto_paid=?,priority=?,kind=?,supports_tools=?,supports_images=?,supports_responses=?,supports_messages=?,messages_base_url=?,auth_mode=? WHERE id=?`, c.Name, c.BaseURL, c.AuthMode, c.APIKey, c.APIKey, c.Model, c.RemoteModel, c.Enabled, c.Paid, c.AutoPaid, c.Priority, c.Kind, c.SupportsTools, c.SupportsImages, c.SupportsResponses, c.SupportsMessages, c.MessagesBaseURL, c.AuthMode, c.ID)
 	if e != nil {
@@ -238,6 +261,12 @@ func (s *Server) SaveChannel(c *Channel) error {
 	n, e := result.RowsAffected()
 	if e == nil && n == 0 {
 		return errors.New("渠道不存在")
+	}
+	if e != nil {
+		return e
+	}
+	if oldKind != c.Kind || oldBaseURL != c.BaseURL || oldMessagesBaseURL != c.MessagesBaseURL || oldAuthMode != c.AuthMode || oldAPIKey != effectiveKey {
+		_, e = s.db.Exec(`DELETE FROM quota_states WHERE channel_id=?`, c.ID)
 	}
 	return e
 }
@@ -327,6 +356,7 @@ func (s *Server) Handler(webDir string) http.Handler {
 			fail(w, 500, "删除失败")
 			return
 		}
+		_, _ = s.db.Exec(`DELETE FROM quota_states WHERE channel_id=?`, id)
 		w.WriteHeader(204)
 	})
 	m.HandleFunc("GET /api/channels/usage", s.channelUsage)
@@ -828,11 +858,34 @@ func (s *Server) proxyModel(w http.ResponseWriter, r *http.Request, path string)
 			}
 		}
 	}
+	quotaStates, e := s.quotaStates()
+	if e != nil {
+		fail(w, 500, "读取额度状态失败")
+		return
+	}
+	quotaNow := s.now().UTC()
 	start := time.Now()
 	attempted := 0
+	skipped := 0
 	for _, c := range cs {
 		if !c.Enabled || c.Model != model || (c.Paid && !c.AutoPaid) || (needsTools && !c.SupportsTools) || (needsImages && !c.SupportsImages) || (path == "/responses" && !c.SupportsResponses) || (path == "/messages" && !c.SupportsMessages) {
 			continue
+		}
+		state, hasQuotaState := quotaStates[c.ID]
+		if hasQuotaState {
+			if state.ProbeMode == quotaProbeUsage {
+				if !quotaNow.Before(state.NextProbeAt) {
+					if _, claimed, err := s.claimQuotaProbe(c.ID, quotaProbeUsage, quotaNow); err == nil && claimed && s.quotaProbeAsync != nil {
+						s.quotaProbeAsync(c.ID)
+					}
+				}
+				skipped++
+				continue
+			}
+			if quotaNow.Before(state.NextProbeAt) {
+				skipped++
+				continue
+			}
 		}
 		attempted++
 		body["model"], _ = json.Marshal(c.RemoteModel)
@@ -880,6 +933,18 @@ func (s *Server) proxyModel(w http.ResponseWriter, r *http.Request, path string)
 			}
 		}
 		applyDimOAuthHeaders(req, c)
+		probeRevision := int64(0)
+		probeAttempt := false
+		if hasQuotaState {
+			revision, claimed, err := s.claimQuotaProbe(c.ID, quotaProbeRequest, quotaNow)
+			if err != nil || !claimed {
+				attempted--
+				skipped++
+				continue
+			}
+			probeRevision = revision
+			probeAttempt = true
+		}
 		resp, e := s.client.Do(req)
 		if e != nil {
 			s.record(model, c, 0, start, nil)
@@ -890,9 +955,17 @@ func (s *Server) proxyModel(w http.ResponseWriter, r *http.Request, path string)
 		}
 		if resp.StatusCode == 401 || resp.StatusCode == 402 || resp.StatusCode == 403 || resp.StatusCode == 429 || resp.StatusCode >= 500 {
 			s.record(model, c, resp.StatusCode, start, nil)
-			io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-			resp.Body.Close()
+			if resp.StatusCode == 402 {
+				body := readQuotaErrorBody(resp)
+				_ = s.markQuotaExhausted(c, s.quotaResetFromResponse(resp.Header, body, s.now().UTC()))
+			} else {
+				io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+				resp.Body.Close()
+			}
 			continue
+		}
+		if probeAttempt {
+			_ = s.clearQuotaState(c.ID, probeRevision)
 		}
 		if tracker, ok := w.(*usageWriter); ok {
 			remoteModel := c.RemoteModel
@@ -932,7 +1005,11 @@ func (s *Server) proxyModel(w http.ResponseWriter, r *http.Request, path string)
 		return
 	}
 	if attempted == 0 {
-		fail(w, 503, "没有启用且允许自动使用的匹配渠道")
+		if skipped > 0 {
+			fail(w, 503, "所有匹配渠道均因额度耗尽暂时跳过；请稍后重试")
+		} else {
+			fail(w, 503, "没有启用且允许自动使用的匹配渠道")
+		}
 	} else {
 		fail(w, 502, "所有匹配渠道均不可用；请检查渠道记录")
 	}
