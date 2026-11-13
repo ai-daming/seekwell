@@ -90,5 +90,9 @@ export const copy = {
   usageTotalTokenColumn: '合计 Token',
   usageLastRequest: '最近调用',
   usageTableCaption: '每个访问 Key 的使用统计',
+  themeLabel: '主题',
+  themeSystem: '跟随系统',
+  themeLight: '浅色',
+  themeDark: '深色',
 
 } as const;

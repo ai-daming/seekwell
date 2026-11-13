@@ -1,1 +1,49 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><meta name="theme-color" content="#0B0D10"/><meta name="description" content="SeekWell 本地 DeepSeek 模型网关管理界面"/><link rel="icon" type="image/svg+xml" href="/logo.svg"/><title>SeekWell</title></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0B0D10" />
+    <meta name="description" content="SeekWell 本地 DeepSeek 模型网关管理界面" />
+    <script>
+      (function () {
+        var mode = 'system';
+        try {
+          var stored = localStorage.getItem('seekwell-theme');
+          if (stored === 'light' || stored === 'dark' || stored === 'system') {
+            mode = stored;
+          }
+        } catch (error) {
+          mode = 'system';
+        }
+        try {
+          var theme = mode;
+          if (mode === 'system') {
+            theme = 'dark';
+            try {
+              if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+                theme = 'light';
+              }
+            } catch (error) {
+              theme = 'dark';
+            }
+          }
+          document.documentElement.dataset.theme = theme;
+          document.documentElement.style.colorScheme = theme;
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) {
+            meta.setAttribute('content', theme === 'light' ? '#f5f7f9' : '#0B0D10');
+          }
+        } catch (error) {
+          document.documentElement.dataset.theme = 'dark';
+        }
+      })();
+    </script>
+    <link rel="icon" type="image/svg+xml" href="/logo.svg" />
+    <title>SeekWell</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

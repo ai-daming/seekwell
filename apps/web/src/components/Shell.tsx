@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { copy } from '../copy';
 import type { Tab } from '../types';
 import { Icon, type IconName } from './Icon';
+import { ThemeControl } from './ThemeControl';
 
 const NAV: ReadonlyArray<{ id: Tab; icon: IconName; label: string }> = [
   { id: 'overview', icon: 'overview', label: '总览' },
@@ -84,7 +85,8 @@ export function Shell({ tab, refreshing, onTabChange, onRefresh, children }: She
           </div>
           <div className="topbar__right">
             <span className="live-dot" aria-hidden="true" />
-            <span>本地服务</span>
+            <span className="live-text">本地服务</span>
+            <ThemeControl />
             <button
               type="button"
               className="button button--ghost"
