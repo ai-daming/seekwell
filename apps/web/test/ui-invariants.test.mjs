@@ -121,6 +121,10 @@ test('T4 copy 不变量非空且被组件引用', () => {
     'usageUnknown',
     'usageNeverUsed',
     'usageStatsFailed',
+    'themeLabel',
+    'themeSystem',
+    'themeLight',
+    'themeDark',
   ];
   for (const name of required) {
     const match = copySource.match(new RegExp(`\\b${name}\\s*:\\s*(['"\`])([^'"\`]+)\\1`));
@@ -386,4 +390,108 @@ test('T22 调用记录展示输入/输出 Token 与缓存命中率且未知不�
   assert.match(activity, /input_tokens/, '命中率缺少 input_tokens 回退');
   assert.match(activity, /Number\.isFinite\(/, '命中率未拦截 NaN/Infinity');
   assert.match(activity, /toFixed\(1\)/, '命中率未格式化为一位小数');
+});
+
+const themeTokens = [
+  'bg',
+  'surface',
+  'surface-raised',
+  'surface-soft',
+  'code-bg',
+  'border',
+  'border-strong',
+  'overlay',
+  'shadow-lg',
+  'text',
+  'text-secondary',
+  'text-muted',
+  'text-on-accent',
+  'accent',
+  'accent-soft',
+  'accent-border',
+  'success',
+  'warning',
+  'warning-soft',
+  'danger',
+  'danger-soft',
+  'focus',
+  'dot-off',
+  'row-line',
+];
+
+test('W1 浅色 token 完整且深色值保持', () => {
+  const theme = read(join(srcRoot, 'theme.css'));
+  const lightMatch = theme.match(/:root\[data-theme=["']light["']\][\s\S]*?\{([\s\S]*?)\n\}/);
+  assert.ok(lightMatch, 'theme.css 缺少 :root[data-theme="light"] 浅色选择器');
+  const lightBlock = lightMatch[1];
+  for (const token of themeTokens) {
+    assert.match(lightBlock, new RegExp(`--${token}\\s*:`), `浅色主题缺少 --${token}`);
+  }
+  assert.match(lightBlock, /color-scheme:\s*light/, '浅色主题缺少 color-scheme: light');
+
+  for (const [token, value] of [
+    ['bg', '#0b0d10'],
+    ['text', '#e6edf3'],
+    ['accent', '#6ee7a8'],
+  ]) {
+    assert.match(
+      theme,
+      new RegExp(`--${token}:\\s*${value};`, 'i'),
+      `深色主题的 --${token} 被改动`,
+    );
+  }
+  assert.match(theme, /color-scheme:\s*dark/, '深色主题缺少 color-scheme: dark');
+});
+
+test('W2 index.html 首屏预置主题脚本', () => {
+  const html = read(join(webRoot, 'index.html'));
+  const moduleIndex = html.search(/<script\b[^>]*type=["']module["']/);
+  assert.ok(moduleIndex >= 0, 'index.html 缺少模块脚本');
+  const inlineScripts = [...html.matchAll(/<script(?![^>]*\btype=["']module["'])[^>]*>([\s\S]*?)<\/script>/g)];
+  const themeScript = inlineScripts.find((match) => match[1].includes('seekwell-theme'));
+  assert.ok(themeScript, 'index.html 缺少包含 seekwell-theme 的内联主题脚本');
+  assert.ok(themeScript.index < moduleIndex, '主题脚本必须出现在模块脚本之前');
+  for (const fragment of ['localStorage', 'prefers-color-scheme', 'theme-color']) {
+    assert.ok(themeScript[1].includes(fragment), `首屏主题脚本缺少 ${fragment}`);
+  }
+  assert.match(themeScript[1], /dataset\.theme|data-theme/, '首屏主题脚本未设置 data-theme');
+  assert.match(themeScript[1], /try\s*\{[\s\S]*?\}\s*catch/, '首屏主题脚本缺少 try/catch');
+  assert.match(html, /<meta\s+name=["']theme-color["']/, 'index.html 缺少 theme-color meta');
+});
+
+test('W3 主题控件引用文案且状态可感知', () => {
+  const shell = read(join(componentsRoot, 'Shell.tsx'));
+  const controlPath = join(componentsRoot, 'ThemeControl.tsx');
+  const control = existsSync(controlPath) ? read(controlPath) : '';
+  const source = shell + control;
+  for (const name of ['themeLabel', 'themeSystem', 'themeLight', 'themeDark']) {
+    assert.ok(source.includes(`copy.${name}`), `主题控件没有引用 copy.${name}`);
+  }
+  assert.match(source, /<label|<select|aria-label=/, '主题控件缺少可访问名称');
+  assert.match(source, /aria-pressed|aria-checked|role=["']radio|<select/, '主题控件没有可被辅助技术识别的选中状态');
+  assert.match(source, /onChange=|aria-pressed|aria-checked/, '主题控件缺少选择交互');
+  assert.match(shell, /<ThemeControl/, 'Shell 未渲染独立的主题控件');
+
+  const themeIndex = shell.indexOf('<ThemeControl');
+  const refreshIndex = shell.indexOf('onClick={onRefresh}');
+  assert.ok(themeIndex >= 0 && refreshIndex > themeIndex, '主题控件应位于刷新按钮之前');
+});
+
+test('W4 颜色 token 纪律', () => {
+  const base = read(join(srcRoot, 'base.css'));
+  assert.doesNotMatch(base, /color-scheme\s*:\s*dark/, 'base.css 仍硬编码 color-scheme: dark');
+  for (const file of cssFiles.filter((item) => item !== join(srcRoot, 'theme.css'))) {
+    const css = read(file);
+    assert.doesNotMatch(css, /#[0-9a-f]{3,8}\b/i, `${relative(webRoot, file)} 存在 hex 颜色字面量`);
+    assert.doesNotMatch(css, /\brgba?\(/i, `${relative(webRoot, file)} 存在 rgb/rgba 颜色字面量`);
+  }
+});
+
+test('W5 构建产物包含预置脚本与浅色选择器', () => {
+  const distRoot = join(webRoot, 'dist');
+  const html = read(join(distRoot, 'index.html'));
+  assert.match(html, /seekwell-theme/, '构建产物缺少首屏主题脚本');
+  assert.match(html, /prefers-color-scheme/, '构建产物缺少系统配色查询');
+  const distCss = walk(distRoot).filter((file) => file.endsWith('.css')).map(read).join('\n');
+  assert.match(distCss, /data-theme=["']?light/, '构建产物缺少浅色主题选择器');
 });
