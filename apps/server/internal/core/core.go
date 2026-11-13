@@ -154,6 +154,14 @@ func New(path string) (*Server, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := ensurePricingHistory(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := seedPricingHistory(db, pricing.snapshot); err != nil {
+		db.Close()
+		return nil, err
+	}
 	_ = os.Chmod(path, 0600)
 	return &Server{db: db, client: &http.Client{Timeout: 5 * time.Minute}, speedTimeout: 30 * time.Second, testTimeout: 60 * time.Second, sessions: make(map[string]sessionBinding), pricing: pricing, pricingClient: &http.Client{Timeout: pricingSyncTimeout}, pricingURL: pricingURL, now: time.Now}, nil
 }
@@ -653,8 +661,21 @@ func nullableInt(n sql.NullInt64) any {
 	}
 	return nil
 }
+
+func costUnknownReason(status int, input, output, cost sql.NullInt64) string {
+	if cost.Valid {
+		return ""
+	}
+	if status < 200 || status >= 300 {
+		return "failed"
+	}
+	if !input.Valid || !output.Valid {
+		return "no_usage"
+	}
+	return "unpriced"
+}
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {
-	rows, e := s.db.Query(`SELECT created_at,model,channel,kind,status,duration_ms,input_tokens,output_tokens,cache_hit_tokens,cache_miss_tokens,cost_nano_cny,price_period FROM requests ORDER BY id DESC LIMIT 100`)
+	rows, e := s.db.Query(`SELECT created_at,model,channel,kind,status,duration_ms,input_tokens,output_tokens,cache_hit_tokens,cache_miss_tokens,cost_nano_cny,price_period,pricing_model FROM requests ORDER BY id DESC LIMIT 100`)
 	if e != nil {
 		fail(w, 500, "读取记录失败")
 		return
@@ -665,18 +686,26 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 		var at, model, ch, kind string
 		var status, ms int
 		var input, output, cacheHit, cacheMiss, costNano sql.NullInt64
-		var period sql.NullString
-		if e = rows.Scan(&at, &model, &ch, &kind, &status, &ms, &input, &output, &cacheHit, &cacheMiss, &costNano, &period); e != nil {
+		var period, pricingModel sql.NullString
+		if e = rows.Scan(&at, &model, &ch, &kind, &status, &ms, &input, &output, &cacheHit, &cacheMiss, &costNano, &period, &pricingModel); e != nil {
 			fail(w, 500, "读取记录失败")
 			return
 		}
 		var cost any
 		var pricePeriod any
+		var modelName any
 		if costNano.Valid {
 			cost = nanoToCNY(costNano.Int64)
 			pricePeriod = period.String
 		}
-		out = append(out, map[string]any{"created_at": at, "model": model, "channel": ch, "kind": kind, "status": status, "duration_ms": ms, "input_tokens": nullableInt(input), "output_tokens": nullableInt(output), "cache_hit_tokens": nullableInt(cacheHit), "cache_miss_tokens": nullableInt(cacheMiss), "cost_cny": cost, "price_period": pricePeriod})
+		if pricingModel.Valid {
+			modelName = pricingModel.String
+		}
+		var reason any
+		if value := costUnknownReason(status, input, output, costNano); value != "" {
+			reason = value
+		}
+		out = append(out, map[string]any{"created_at": at, "model": model, "channel": ch, "kind": kind, "status": status, "duration_ms": ms, "input_tokens": nullableInt(input), "output_tokens": nullableInt(output), "cache_hit_tokens": nullableInt(cacheHit), "cache_miss_tokens": nullableInt(cacheMiss), "cost_cny": cost, "price_period": pricePeriod, "pricing_model": modelName, "cost_unknown_reason": reason})
 	}
 	jsonOut(w, 200, out)
 }

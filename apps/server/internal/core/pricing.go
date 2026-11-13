@@ -50,26 +50,52 @@ type pricingState struct {
 	syncing       bool
 }
 
-// PricingInfo is the read-only pricing block in GET /api/usage/stats.
-type PricingInfo struct {
-	Currency     string   `json:"currency"`
-	Unit         string   `json:"unit"`
-	Source       string   `json:"source"`
-	SourceURL    string   `json:"source_url"`
-	LastSyncAt   *string  `json:"last_sync_at"`
-	LastSyncOK   bool     `json:"last_sync_ok"`
-	Stale        bool     `json:"stale"`
-	Warning      string   `json:"warning"`
-	PeakTimezone string   `json:"peak_timezone"`
-	PeakWindows  []string `json:"peak_windows"`
-	HolidayYears []int    `json:"holiday_years"`
+// PricingRate is one model's official price in CNY per million tokens.
+type PricingRate struct {
+	Model    string  `json:"model"`
+	HitOff   float64 `json:"hit_off"`
+	HitPeak  float64 `json:"hit_peak"`
+	MissOff  float64 `json:"miss_off"`
+	MissPeak float64 `json:"miss_peak"`
+	OutOff   float64 `json:"out_off"`
+	OutPeak  float64 `json:"out_peak"`
 }
 
-// pricingModelAliases maps the legacy Flash names that the official page still
-// bills as deepseek-flash. Comparison is trim + ASCII lowercase; no fuzzy match.
+// PricingHistory is one observed official snapshot. ObservedAt is when this
+// system first saw the rates, not the official effective time.
+type PricingHistory struct {
+	Version    string        `json:"version"`
+	ObservedAt string        `json:"observed_at"`
+	Source     string        `json:"source"`
+	Models     []PricingRate `json:"models"`
+}
+
+// PricingInfo is the read-only pricing block in GET /api/usage/stats.
+type PricingInfo struct {
+	Currency     string           `json:"currency"`
+	Unit         string           `json:"unit"`
+	Source       string           `json:"source"`
+	SourceURL    string           `json:"source_url"`
+	LastSyncAt   *string          `json:"last_sync_at"`
+	LastSyncOK   bool             `json:"last_sync_ok"`
+	Stale        bool             `json:"stale"`
+	Warning      string           `json:"warning"`
+	PeakTimezone string           `json:"peak_timezone"`
+	PeakWindows  []string         `json:"peak_windows"`
+	HolidayYears []int            `json:"holiday_years"`
+	Models       []PricingRate    `json:"models"`
+	History      []PricingHistory `json:"history"`
+}
+
+// pricingModelAliases maps upstream IDs used by non-official channels to the
+// official price keys. Comparison is trim + lowercase; no fuzzy match.
 var pricingModelAliases = map[string]string{
 	"deepseek-v4-flash":            "deepseek-flash",
 	"deepseek-v4-flash-vision-exp": "deepseek-flash",
+	"deepseek-v4.1-flash":          "deepseek-flash",
+	"deepseek-v4.1-flash-1017":     "deepseek-flash",
+	"deepseek-pro":                 "deepseek-v4-pro",
+	"deepseek-v4.1-pro":            "deepseek-v4-pro",
 }
 
 func bundledPricingRates() map[string]priceRates {
@@ -157,11 +183,15 @@ func pricingHolidayWarning(at time.Time) string {
 }
 
 func normalizePricingModel(name string) string {
-	return strings.ToLower(strings.TrimSpace(name))
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	return strings.TrimPrefix(normalized, "deepseek/")
 }
 
 func canonicalPricingModel(rates map[string]priceRates, name string) (string, bool) {
 	normalized := normalizePricingModel(name)
+	if _, ok := rates[normalized]; ok {
+		return normalized, true
+	}
 	if alias, ok := pricingModelAliases[normalized]; ok {
 		normalized = alias
 	}
@@ -200,6 +230,7 @@ type attemptPrice struct {
 	Period   string
 	Model    string
 	Version  string
+	Reason   string
 }
 
 func (s *Server) ratesFor(model string) (priceRates, string, bool) {
@@ -212,25 +243,65 @@ func (s *Server) activePricing() pricingSnapshot {
 	return s.pricing.snapshot
 }
 
-// priceAttempt prices one upstream attempt. Only DeepSeek official channels with
-// a known model, a successful status and a complete usage split are priced;
-// everything else stays unknown (nil) rather than zero.
+// priceAttempt prices one upstream attempt against the active official rates.
+// Every channel kind is priced when the model and usage are sufficient; missing
+// cache split falls back to all-input-as-miss. Unknown results carry a stable
+// reason instead of zero.
 func (s *Server) priceAttempt(kind, remoteModel string, status int, at time.Time, usage *usageTotals) attemptPrice {
-	if kind != "deepseek" || usage == nil || status < 200 || status >= 300 {
-		return attemptPrice{}
+	if status < 200 || status >= 300 {
+		return attemptPrice{Reason: "failed"}
+	}
+	if usage == nil {
+		return attemptPrice{Reason: "no_usage"}
+	}
+	input, output, hit, miss := usage.normalized()
+	if output == nil {
+		return attemptPrice{Reason: "no_usage"}
+	}
+	if hit == nil && miss == nil {
+		if input == nil {
+			return attemptPrice{Reason: "no_usage"}
+		}
+		zero := int64(0)
+		hit, miss = &zero, input
+	}
+	if hit == nil || miss == nil {
+		return attemptPrice{Reason: "no_usage"}
 	}
 	snapshot := s.activePricing()
 	rates, canonical, ok := ratesForMap(snapshot.Rates, remoteModel)
 	if !ok {
-		return attemptPrice{}
-	}
-	_, output, hit, miss := usage.normalized()
-	if hit == nil || miss == nil || output == nil {
-		return attemptPrice{}
+		return attemptPrice{Reason: "unpriced"}
 	}
 	period := pricePeriodAt(at)
 	cost := computeCostNano(rates, period, *hit, *miss, *output)
 	return attemptPrice{CostNano: &cost, Period: period, Model: canonical, Version: snapshot.Version}
+}
+
+func nanoToYuanPerMillion(nano int64) float64 {
+	return float64(nano) / 1000
+}
+
+func pricingRatesAPI(rates map[string]priceRates) []PricingRate {
+	names := make([]string, 0, len(rates))
+	for name := range rates {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]PricingRate, 0, len(names))
+	for _, name := range names {
+		rate := rates[name]
+		out = append(out, PricingRate{
+			Model:    name,
+			HitOff:   nanoToYuanPerMillion(rate.HitOff),
+			HitPeak:  nanoToYuanPerMillion(rate.HitPeak),
+			MissOff:  nanoToYuanPerMillion(rate.MissOff),
+			MissPeak: nanoToYuanPerMillion(rate.MissPeak),
+			OutOff:   nanoToYuanPerMillion(rate.OutOff),
+			OutPeak:  nanoToYuanPerMillion(rate.OutPeak),
+		})
+	}
+	return out
 }
 
 func (s *Server) pricingInfo() PricingInfo {
@@ -249,6 +320,8 @@ func (s *Server) pricingInfo() PricingInfo {
 		PeakTimezone: peakTimezone,
 		PeakWindows:  append([]string(nil), peakWindows...),
 		HolidayYears: holidayYears(),
+		Models:       pricingRatesAPI(snapshot.Rates),
+		History:      s.pricingHistory(),
 	}
 	if info.SourceURL == "" {
 		info.SourceURL = pricingURL

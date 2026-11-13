@@ -130,8 +130,37 @@ test('T4 copy 不变量非空且被组件引用', () => {
     'usagePricingExclusions',
     'usagePricingSnapshot',
     'usagePricingBundled',
+    'usagePricingRemote',
     'usagePricingSyncFailed',
+    'usagePricingMayBeStale',
     'usageHolidayUncovered',
+    'usagePricingCurrent',
+    'usagePricingHistory',
+    'usagePricingUnit',
+    'usagePricingModel',
+    'usagePricingHitOff',
+    'usagePricingHitPeak',
+    'usagePricingMissOff',
+    'usagePricingMissPeak',
+    'usagePricingOutOff',
+    'usagePricingOutPeak',
+    'usagePricingAliasNotice',
+    'usagePricingNonOfficialNotice',
+    'usagePricingHistoryObservedAt',
+    'usagePricingHistorySource',
+    'usagePricingHistoryBaseline',
+    'usagePricingHistoryNewModel',
+    'usagePricingHistoryChange',
+    'usagePricingHistoryEmpty',
+    'usagePricingHistoryNotExact',
+    'usagePricingHistoryNoBackfill',
+    'usagePricingHistoryCaption',
+    'usagePricingCurrentCaption',
+    'usageCostOfficialEquivalent',
+    'usageCostAssumedMiss',
+    'usageCostFailed',
+    'usageCostNoUsage',
+    'usageCostUnpriced',
     'themeLabel',
     'themeSystem',
     'themeLight',
@@ -457,6 +486,50 @@ test('T23 费用字段、格式化与页面展示', () => {
   assert.match(usage, /pricing\.warning/, '页面未展示 pricing.warning');
   assert.match(usage, /copy\.usageHolidayUncovered/, '缺少节假日覆盖提示');
   assert.match(usage, /holiday_years/, '未使用 holiday_years 判断覆盖');
+});
+
+test('T24 价目与价格历史展示', () => {
+  const typeSource = read(join(srcRoot, 'types.ts'));
+  assert.match(typeSource, /export type PricingRate\s*=/, '缺少 PricingRate 类型');
+  assert.match(typeSource, /export type PricingHistory\s*=/, '缺少 PricingHistory 类型');
+  assert.match(typeSource, /export type UsagePricing[\s\S]*?models:\s*PricingRate\[\];/, 'UsagePricing 缺少 models');
+  assert.match(typeSource, /export type UsagePricing[\s\S]*?history:\s*PricingHistory\[\];/, 'UsagePricing 缺少 history');
+  for (const field of ['pricing_model', 'cost_unknown_reason']) {
+    assert.match(typeSource, new RegExp(`export type Entry[\\s\\S]*?${field}`), `Entry 缺少 ${field}`);
+  }
+
+  const format = read(join(componentsRoot, 'format.ts'));
+  assert.match(format, /export function formatUnitPrice\(value:\s*number\s*\|\s*null/, 'formatUnitPrice 签名应接受 number | null');
+  assert.match(format, /Number\.isFinite/, 'formatUnitPrice 未拦截 NaN/Infinity');
+  assert.match(format, /maximumFractionDigits:\s*4/, '单价未限制最多 4 位小数');
+  assert.match(format, /minimumFractionDigits:\s*2/, '单价未保证至少 2 位小数');
+  assert.match(format, /¥/, '单价缺少人民币符号');
+  assert.doesNotMatch(format, /formatUnitPrice[\s\S]*< ¥0\.000001/, '单价不应复用极小费用的兜底文案');
+
+  const usage = read(join(componentsRoot, 'UsagePage.tsx'));
+  assert.match(usage, /stats\.pricing\.models|pricing\.models/, 'UsagePage 未使用当前价目 models');
+  assert.match(usage, /stats\.pricing\.history|pricing\.history/, 'UsagePage 未使用价格历史 history');
+  for (const field of ['hit_off', 'hit_peak', 'miss_off', 'miss_peak', 'out_off', 'out_peak']) {
+    assert.match(usage, new RegExp(field), `当前价目表缺少 ${field}`);
+  }
+  assert.match(usage, /observed_at/, '价格历史缺少 observed_at');
+  assert.match(usage, /snapshot\.source/, '价格历史缺少 source');
+  assert.match(usage, /<caption[\s\S]*?<\/caption>/, '价目或历史表缺少 caption');
+  assert.match(usage, /copy\.usagePricingHistoryEmpty/, '价格历史缺少空态');
+  assert.match(usage, /usage-price--changed/, '价格历史缺少变化高亮 class');
+  assert.match(usage, /formatUnitPrice\(/, '价目未使用统一单价格式化函数');
+
+  const activity = read(join(componentsRoot, 'ActivityTable.tsx'));
+  assert.match(activity, /copy\.usageCostOfficialEquivalent/, '调用记录缺少官方价折算标识');
+  assert.match(activity, /copy\.usageCostAssumedMiss/, '调用记录缺少缺缓存拆分估算标识');
+  assert.match(activity, /copy\.usageCostFailed/, '调用记录缺少失败原因');
+  assert.match(activity, /copy\.usageCostNoUsage/, '调用记录缺少缺用量原因');
+  assert.match(activity, /copy\.usageCostUnpriced/, '调用记录缺少未定价原因');
+
+  const usageCopy = read(join(srcRoot, 'copy.ts'));
+  assert.doesNotMatch(usageCopy, /非 DeepSeek 官方渠道、未知模型或缺少缓存拆分时显示未知/, '旧文案仍声称非官方渠道/缺缓存拆分未知');
+  assert.match(usageCopy, /缺缓存拆分时按未命中估算|缺缓存拆分，按未命中估/, '新文案缺少缺缓存拆分口径');
+  assert.match(usageCopy, /官方价折算/, '新文案缺少官方价折算说明');
 });
 
 const themeTokens = [

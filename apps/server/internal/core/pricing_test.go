@@ -107,7 +107,7 @@ func TestPricingFormula(t *testing.T) {
 	}
 }
 
-// S3 未知费用：非官方渠道、未知模型、缺缓存拆分、缺输出、无 usage 都为 nil。
+// S3 未知费用：失败、缺用量、未知模型仍为 nil，并给出可展示的原因。
 func TestPricingUnknownCost(t *testing.T) {
 	s, err := New(filepath.Join(t.TempDir(), "pricing.db"))
 	if err != nil {
@@ -127,29 +127,112 @@ func TestPricingUnknownCost(t *testing.T) {
 		model  string
 		status int
 		usage  *usageTotals
-		hit    *int64
-		miss   *int64
-		output *int64
+		reason string
 	}{
-		{"compatible channel", "compatible", "deepseek-flash", 200, nil, &hit, &miss, &out},
-		{"unknown remote model", "deepseek", "deepseek-mystery", 200, nil, &hit, &miss, &out},
-		{"missing cache split", "deepseek", "deepseek-flash", 200, usageWith(`{"usage":{"prompt_tokens":10,"completion_tokens":5}}`), nil, nil, nil},
-		{"missing output", "deepseek", "deepseek-flash", 200, usageWith(`{"usage":{"prompt_tokens":10,"prompt_cache_hit_tokens":4,"prompt_cache_miss_tokens":6}}`), nil, nil, nil},
-		{"no usage", "deepseek", "deepseek-flash", 200, nil, nil, nil, nil},
-		{"failed attempt", "deepseek", "deepseek-flash", 429, nil, &hit, &miss, &out},
+		{"unknown remote model", "deepseek", "deepseek-mystery", 200, tokensUsageAt(&hit, &miss, &out), "unpriced"},
+		{"unknown compatible model", "compatible", "deepseek-mystery", 200, tokensUsageAt(&hit, &miss, &out), "unpriced"},
+		{"missing output", "deepseek", "deepseek-flash", 200, usageWith(`{"usage":{"prompt_tokens":10,"prompt_cache_hit_tokens":4,"prompt_cache_miss_tokens":6}}`), "no_usage"},
+		{"only output", "compatible", "deepseek-flash", 200, usageWith(`{"usage":{"completion_tokens":5}}`), "no_usage"},
+		{"no usage", "deepseek", "deepseek-flash", 200, nil, "no_usage"},
+		{"failed attempt", "deepseek", "deepseek-flash", 429, tokensUsageAt(&hit, &miss, &out), "failed"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var got attemptPrice
-			if tc.usage != nil {
-				got = s.priceAttempt(tc.kind, tc.model, tc.status, at, tc.usage)
-			} else {
-				got = s.priceAttempt(tc.kind, tc.model, tc.status, at, tokensUsageAt(tc.hit, tc.miss, tc.output))
+			got := s.priceAttempt(tc.kind, tc.model, tc.status, at, tc.usage)
+			if got.CostNano != nil || got.Period != "" || got.Model != "" {
+				t.Fatalf("cost=%v period=%q model=%q want unknown", got.CostNano, got.Period, got.Model)
 			}
-			if got.CostNano != nil || got.Period != "" {
-				t.Fatalf("cost=%v period=%q want unknown", got.CostNano, got.Period)
+			if got.Reason != tc.reason {
+				t.Fatalf("reason=%q want %q", got.Reason, tc.reason)
 			}
 		})
+	}
+}
+
+// S3a 非官方渠道与缺缓存拆分也按官方价推算；缺少缓存拆分按全部未命中估算。
+func TestPricingNonOfficialAndMissingCacheSplit(t *testing.T) {
+	s, err := New(filepath.Join(t.TempDir(), "pricing.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	at := beijingAt(2026, time.November, 13, 10, 0).UTC() // Friday peak
+	complete := tokensUsageAt(int64Ptr(10), int64Ptr(20), int64Ptr(5))
+	for _, kind := range []string{"compatible", "opencode_go", "dimagent"} {
+		t.Run(kind+" complete usage", func(t *testing.T) {
+			got := s.priceAttempt(kind, "deepseek-flash", 200, at, complete)
+			if got.CostNano == nil || *got.CostNano != 10*40+20*2000+5*8000 {
+				t.Fatalf("cost=%v want peak formula", got.CostNano)
+			}
+			if got.Model != "deepseek-flash" || got.Period != "peak" || got.Reason != "" {
+				t.Fatalf("attempt price=%+v", got)
+			}
+		})
+	}
+
+	var usage usageTotals
+	usage.parse([]byte(`{"usage":{"prompt_tokens":10,"completion_tokens":5}}`))
+	got := s.priceAttempt("compatible", "deepseek-flash", 200, at, &usage)
+	if got.CostNano == nil || *got.CostNano != 10*2000+5*8000 {
+		t.Fatalf("missing cache split cost=%v want input as miss + output", got.CostNano)
+	}
+	if got.Model != "deepseek-flash" || got.Period != "peak" {
+		t.Fatalf("missing cache split attempt=%+v", got)
+	}
+}
+
+// S3c 渠道上游模型名按官方别名归一；直接命中官方价目键优先于别名。
+func TestPricingModelAliases(t *testing.T) {
+	cases := []struct {
+		name, model, want string
+	}{
+		{"opencode flash", "deepseek-v4.1-flash", "deepseek-flash"},
+		{"opencode dated flash", "deepseek-v4.1-flash-1017", "deepseek-flash"},
+		{"slash prefix", "deepseek/deepseek-v4.1-flash", "deepseek-flash"},
+		{"case and spaces", "  DeepSeek/DeepSeek-V4.1-Flash  ", "deepseek-flash"},
+		{"dimagent pro", "deepseek-pro", "deepseek-v4-pro"},
+		{"alternate pro", "deepseek-v4.1-pro", "deepseek-v4-pro"},
+		{"legacy flash", "deepseek-v4-flash", "deepseek-flash"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, canonical, ok := pricingRatesFor(tc.model)
+			if !ok || canonical != tc.want {
+				t.Fatalf("model=%q canonical=%q ok=%v want %q", tc.model, canonical, ok, tc.want)
+			}
+		})
+	}
+
+	rates := map[string]priceRates{
+		"deepseek-v4.1-flash": {OutOff: 123},
+		"deepseek-flash":      {OutOff: 20},
+	}
+	rate, canonical, ok := ratesForMap(rates, "deepseek-v4.1-flash")
+	if !ok || canonical != "deepseek-v4.1-flash" || rate.OutOff != 123 {
+		t.Fatalf("direct official key must win over alias: %+v %q %v", rate, canonical, ok)
+	}
+}
+
+// S3d 非官方渠道的别名模型按当时官方价算出金额。
+func TestPricingAliasedChannelCost(t *testing.T) {
+	s, err := New(filepath.Join(t.TempDir(), "pricing.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	at := beijingAt(2026, time.November, 13, 10, 0).UTC()
+	usage := tokensUsageAt(int64Ptr(0), int64Ptr(1_000_000), int64Ptr(0))
+	for _, tc := range []struct{ kind, model string }{
+		{"opencode_go", "deepseek-v4.1-flash"},
+		{"dimagent", "deepseek-pro"},
+	} {
+		got := s.priceAttempt(tc.kind, tc.model, 200, at, usage)
+		if got.CostNano == nil {
+			t.Fatalf("%s/%s not priced", tc.kind, tc.model)
+		}
+		if tc.model == "deepseek-pro" && *got.CostNano != 9_000_000_000 {
+			t.Fatalf("pro cost=%d want 9 CNY worth of nano", *got.CostNano)
+		}
 	}
 }
 

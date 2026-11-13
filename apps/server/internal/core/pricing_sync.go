@@ -307,15 +307,29 @@ func (s *Server) SyncPricing(ctx context.Context) error {
 	s.pricing.mu.Lock()
 	defer s.pricing.mu.Unlock()
 	s.pricing.syncing = false
-	s.pricing.lastSyncOK = fetchErr == nil
 	if fetchErr != nil {
+		s.pricing.lastSyncOK = false
 		s.pricing.lastError = fetchErr.Error()
 		_ = s.persistPricingLocked()
 		return fetchErr
 	}
+	previous := s.pricing.snapshot
+	if err := s.appendPricingHistoryIfChanged(snapshot); err != nil {
+		s.pricing.lastSyncOK = false
+		s.pricing.lastError = err.Error()
+		_ = s.persistPricingLocked()
+		return err
+	}
 	s.pricing.snapshot = snapshot
 	s.pricing.lastError = ""
-	return s.persistPricingLocked()
+	s.pricing.lastSyncOK = true
+	if err := s.persistPricingLocked(); err != nil {
+		s.pricing.snapshot = previous
+		s.pricing.lastSyncOK = false
+		s.pricing.lastError = err.Error()
+		return err
+	}
+	return nil
 }
 
 func (s *Server) syncPricingIfDue(ctx context.Context) {

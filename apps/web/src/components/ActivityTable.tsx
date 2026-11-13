@@ -46,6 +46,23 @@ function periodText(entry: Entry): string | null {
   return null;
 }
 
+function costTags(entry: Entry): string[] {
+  if (entry.cost_cny === null) return [];
+  const tags: string[] = [];
+  if (entry.kind && entry.kind !== 'deepseek') tags.push(copy.usageCostOfficialEquivalent);
+  if (entry.cache_hit_tokens === null && entry.cache_miss_tokens === null) {
+    tags.push(copy.usageCostAssumedMiss);
+  }
+  return tags;
+}
+
+function unknownReasonText(entry: Entry): string | null {
+  if (entry.cost_unknown_reason === 'failed') return copy.usageCostFailed;
+  if (entry.cost_unknown_reason === 'no_usage') return copy.usageCostNoUsage;
+  if (entry.cost_unknown_reason === 'unpriced') return copy.usageCostUnpriced;
+  return null;
+}
+
 export function ActivityTable({ entries }: { entries: Entry[] }) {
   if (entries.length === 0) {
     return (
@@ -112,8 +129,13 @@ export function ActivityTable({ entries }: { entries: Entry[] }) {
                 <td>
                   <span className="activity-cost">
                     {formatCost(entry.cost_cny)}
-                    {entry.cost_cny !== null && periodText(entry) && (
-                      <small className="activity-cost__period">{periodText(entry)}</small>
+                    {entry.cost_cny !== null && (
+                      <small className="activity-cost__period">
+                        {[periodText(entry), ...costTags(entry)].filter(Boolean).join(' · ')}
+                      </small>
+                    )}
+                    {entry.cost_cny === null && unknownReasonText(entry) && (
+                      <small className="activity-cost__period">{unknownReasonText(entry)}</small>
                     )}
                   </span>
                 </td>

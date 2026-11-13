@@ -38,7 +38,7 @@ func TestHistoryRecordsCost(t *testing.T) {
 	}
 }
 
-// S6b 未知费用写入 NULL，不参与已知合计。
+// S6b 费用未知写入 NULL，不参与已知合计，并通过 API 暴露原因。
 func TestHistoryCostUnknownCases(t *testing.T) {
 	s, h := newTestServer(t)
 	usage := tokensUsageAt(int64Ptr(10), int64Ptr(20), int64Ptr(5))
@@ -49,11 +49,11 @@ func TestHistoryCostUnknownCases(t *testing.T) {
 		model  string
 		status int
 		usage  *usageTotals
+		reason string
 	}{
-		{"compatible channel", "compatible", "deepseek-flash", 200, usage},
-		{"unknown model", "deepseek", "deepseek-mystery", 200, usage},
-		{"failed attempt", "deepseek", "deepseek-flash", 429, usage},
-		{"missing cache split", "deepseek", "deepseek-flash", 200, tokensUsageAt(nil, nil, int64Ptr(5))},
+		{"unknown model", "deepseek", "deepseek-mystery", 200, usage, "unpriced"},
+		{"failed attempt", "deepseek", "deepseek-flash", 429, usage, "failed"},
+		{"missing output", "deepseek", "deepseek-flash", 200, tokensUsageAt(nil, nil, int64Ptr(5)), "no_usage"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -62,7 +62,48 @@ func TestHistoryCostUnknownCases(t *testing.T) {
 			if !bytes.Contains(raw, []byte(`"cost_cny":null`)) || !bytes.Contains(raw, []byte(`"price_period":null`)) {
 				t.Fatalf("history cost not null: %s", raw)
 			}
+			got := lastHistory(t, h)
+			if got.CostUnknownReason == nil || *got.CostUnknownReason != tc.reason {
+				t.Fatalf("cost_unknown_reason=%v want %q", got.CostUnknownReason, tc.reason)
+			}
+			if got.PricingModel != nil {
+				t.Fatalf("pricing_model=%v want null", got.PricingModel)
+			}
 		})
+	}
+}
+
+// S6b2 非官方渠道和缺缓存拆分写入非空费用；缺缓存拆分不伪造缓存 token。
+func TestHistoryCostCompatibleAndMissingCacheSplit(t *testing.T) {
+	s, h := newTestServer(t)
+	start := beijingAt(2026, time.November, 13, 10, 0).UTC()
+	full := tokensUsageAt(int64Ptr(10), int64Ptr(20), int64Ptr(5))
+	s.record("deepseek-flash", Channel{Name: "compat", Kind: "compatible", RemoteModel: "deepseek-flash"}, http.StatusOK, start, full)
+	got := lastHistory(t, h)
+	if got.CostCNY == nil || got.PricingModel == nil || *got.PricingModel != "deepseek-flash" {
+		t.Fatalf("compatible history cost/model: %+v", got)
+	}
+	want := nanoToCNY(10*40 + 20*2000 + 5*8000)
+	if math.Abs(*got.CostCNY-want) > 1e-12 {
+		t.Fatalf("compatible history cost=%v want %v", *got.CostCNY, want)
+	}
+	if got.CostUnknownReason != nil {
+		t.Fatalf("priced entry reason=%v want null", *got.CostUnknownReason)
+	}
+
+	var usage usageTotals
+	usage.parse([]byte(`{"usage":{"prompt_tokens":10,"completion_tokens":5}}`))
+	s.record("deepseek-flash", Channel{Name: "compat", Kind: "compatible", RemoteModel: "deepseek-flash"}, http.StatusOK, start, &usage)
+	got = lastHistory(t, h)
+	if got.CostCNY == nil || got.PricingModel == nil || *got.PricingModel != "deepseek-flash" {
+		t.Fatalf("missing-cache history cost/model: %+v", got)
+	}
+	if got.CacheHitTokens != nil || got.CacheMissTokens != nil {
+		t.Fatalf("cache split must stay null: hit=%v miss=%v", got.CacheHitTokens, got.CacheMissTokens)
+	}
+	want = nanoToCNY(10*2000 + 5*8000)
+	if math.Abs(*got.CostCNY-want) > 1e-12 {
+		t.Fatalf("missing-cache cost=%v want %v", *got.CostCNY, want)
 	}
 }
 
@@ -99,7 +140,18 @@ func TestAccessRequestRecordsCost(t *testing.T) {
 		t.Fatalf("cost=%v period=%v want 20000/offpeak", cost, period)
 	}
 
-	unknown := &usageWriter{ResponseWriter: httptest.NewRecorder(), channelKind: "compatible", channelModel: "deepseek-flash", channelName: "compat"}
+	compatible := &usageWriter{ResponseWriter: httptest.NewRecorder(), channelKind: "compatible", channelModel: "deepseek-flash", channelName: "compat"}
+	compatible.parse([]byte(`{"usage":{"prompt_tokens":1000,"completion_tokens":0,"prompt_cache_hit_tokens":1000,"prompt_cache_miss_tokens":0}}`))
+	s.recordAccess(key.ID, "/v1/chat/completions", http.StatusOK, start, compatible)
+	var compatibleCost *int64
+	if err := s.db.QueryRow(`SELECT cost_nano_cny FROM access_requests ORDER BY id DESC LIMIT 1`).Scan(&compatibleCost); err != nil {
+		t.Fatal(err)
+	}
+	if compatibleCost == nil || *compatibleCost != 1000*20 {
+		t.Fatalf("compatible channel cost=%v want 20000", compatibleCost)
+	}
+
+	unknown := &usageWriter{ResponseWriter: httptest.NewRecorder(), channelKind: "compatible", channelModel: "deepseek-mystery", channelName: "compat"}
 	unknown.parse([]byte(`{"usage":{"prompt_tokens":1000,"completion_tokens":0,"prompt_cache_hit_tokens":1000,"prompt_cache_miss_tokens":0}}`))
 	s.recordAccess(key.ID, "/v1/chat/completions", http.StatusOK, start, unknown)
 	var unknownCost *int64
@@ -107,7 +159,7 @@ func TestAccessRequestRecordsCost(t *testing.T) {
 		t.Fatal(err)
 	}
 	if unknownCost != nil {
-		t.Fatalf("compatible channel cost=%d want null", *unknownCost)
+		t.Fatalf("unknown model cost=%d want null", *unknownCost)
 	}
 }
 
@@ -170,6 +222,13 @@ func TestPricingMigrationFromOldSchema(t *testing.T) {
 	if overall.CostKnownCount != 0 || overall.CostUnknownCount != 1 || overall.CostCNY != nil {
 		t.Fatalf("old stats cost: %+v", overall.UsageTotals)
 	}
+	var historyCount int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM pricing_history`).Scan(&historyCount); err != nil || historyCount != 0 {
+		t.Fatalf("old database history count=%d err=%v", historyCount, err)
+	}
+	if info := s.pricingInfo(); info.Source != "bundled" || len(info.History) != 0 {
+		t.Fatalf("old database pricing info: %+v", info)
+	}
 
 	// New requests still price and write on an upgraded database.
 	start := beijingAt(2026, time.November, 13, 10, 0).UTC()
@@ -217,5 +276,58 @@ func TestAccessRequestCostFromProxy(t *testing.T) {
 	want := computeCostNano(rates, *period, 600, 400, 10)
 	if *cost != want {
 		t.Fatalf("access cost=%d want %d (%s)", *cost, want, *period)
+	}
+}
+
+// S7d 非官方渠道的官方等价费用计入 overall / key / daily，并与逐条记录一致。
+func TestAccessRequestCompatibleCostAggregation(t *testing.T) {
+	s, h := newUsageStatsServer(t)
+	key, err := s.newAccessKey("compatible-cost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	for _, body := range []string{
+		`{"usage":{"prompt_tokens":1000,"completion_tokens":10,"prompt_cache_hit_tokens":600,"prompt_cache_miss_tokens":400}}`,
+		`{"usage":{"prompt_tokens":100,"completion_tokens":5}}`,
+	} {
+		w := &usageWriter{ResponseWriter: httptest.NewRecorder(), channelKind: "compatible", channelModel: "deepseek-v4.1-flash", channelName: "compat"}
+		w.parse([]byte(body))
+		s.recordAccess(key.ID, "/v1/chat/completions", http.StatusOK, start, w)
+	}
+
+	var expectedNano int64
+	if err := s.db.QueryRow(`SELECT SUM(cost_nano_cny) FROM access_requests WHERE key_id=?`, key.ID).Scan(&expectedNano); err != nil {
+		t.Fatal(err)
+	}
+	if expectedNano <= 0 {
+		t.Fatal("compatible requests were not priced")
+	}
+	status, body := fetchUsageStats(t, h)
+	got := decodeUsageStats(t, status, body)
+	assertCost(t, "overall compatible cost", got.Overall.CostCNY, expectedNano)
+	if got.Overall.CostKnownCount != 2 || got.Overall.CostUnknownCount != 0 {
+		t.Fatalf("overall cost counts=%d/%d", got.Overall.CostKnownCount, got.Overall.CostUnknownCount)
+	}
+	if len(got.Keys) != 1 {
+		t.Fatalf("keys=%+v", got.Keys)
+	}
+	assertCost(t, "key compatible cost", got.Keys[0].CostCNY, expectedNano)
+	if got.Keys[0].CostKnownCount != 2 || got.Keys[0].CostUnknownCount != 0 {
+		t.Fatalf("key cost counts=%d/%d", got.Keys[0].CostKnownCount, got.Keys[0].CostUnknownCount)
+	}
+	today := time.Now().Format("2006-01-02")
+	found := false
+	for _, day := range got.Daily {
+		if day.Date == today {
+			found = true
+			assertCost(t, "daily compatible cost", day.CostCNY, expectedNano)
+			if day.CostKnownCount != 2 || day.CostUnknownCount != 0 {
+				t.Fatalf("daily cost counts=%d/%d", day.CostKnownCount, day.CostUnknownCount)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("today missing from daily: %+v", got.Daily)
 	}
 }

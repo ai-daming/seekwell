@@ -1,7 +1,12 @@
 package core
 
 import (
+	"bytes"
+	"context"
+	"io"
 	"math"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -144,5 +149,73 @@ func TestUsageStatsPricingInfo(t *testing.T) {
 	}
 	if p.SourceURL == "" {
 		t.Fatal("source url missing")
+	}
+	if len(p.Models) != 2 {
+		t.Fatalf("pricing models=%+v want bundled six-rate models", p.Models)
+	}
+	var flash *usageStatsPricingRateBody
+	for i := range p.Models {
+		if p.Models[i].Model == "deepseek-flash" {
+			flash = &p.Models[i]
+		}
+	}
+	if flash == nil {
+		t.Fatalf("missing flash model: %+v", p.Models)
+	}
+	if flash.HitOff != 0.02 || flash.HitPeak != 0.04 || flash.MissOff != 1 || flash.MissPeak != 2 || flash.OutOff != 4 || flash.OutPeak != 8 {
+		t.Fatalf("flash unit rates=%+v", *flash)
+	}
+	if p.History == nil || len(p.History) != 0 {
+		t.Fatalf("empty history=%+v want []", p.History)
+	}
+	if !bytes.Contains(body, []byte(`"history":[]`)) {
+		t.Fatalf("empty history must be [] not null: %s", body)
+	}
+}
+
+// S10 统计接口返回当前价目和按观察时间倒序的价格历史，单位是元/百万 tokens。
+func TestUsageStatsPricingModelsAndHistoryAPI(t *testing.T) {
+	s, h := newUsageStatsServer(t)
+	pointPricingTo(t, s, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, standardPricingDoc())
+	}))
+	if err := s.SyncPricing(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	changed := strings.Replace(standardPricingDoc(), "0.04元", "0.20元", 1)
+	pointPricingTo(t, s, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, changed)
+	}))
+	if err := s.SyncPricing(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	status, body := fetchUsageStats(t, h)
+	got := decodeUsageStats(t, status, body)
+	if len(got.Pricing.Models) != 2 {
+		t.Fatalf("current models=%+v", got.Pricing.Models)
+	}
+	if len(got.Pricing.History) != 2 {
+		t.Fatalf("history=%+v want two snapshots", got.Pricing.History)
+	}
+	if got.Pricing.History[0].ObservedAt < got.Pricing.History[1].ObservedAt {
+		t.Fatalf("history not newest-first: %+v", got.Pricing.History)
+	}
+	for _, entry := range got.Pricing.History {
+		if entry.Version == "" || entry.ObservedAt == "" || entry.Source != "remote" || len(entry.Models) != 2 {
+			t.Fatalf("history entry incomplete: %+v", entry)
+		}
+		if entry.Models[0].Model > entry.Models[1].Model {
+			t.Fatalf("history models not sorted: %+v", entry.Models)
+		}
+	}
+	var newestFlash *usageStatsPricingRateBody
+	for i := range got.Pricing.History[0].Models {
+		if got.Pricing.History[0].Models[i].Model == "deepseek-flash" {
+			newestFlash = &got.Pricing.History[0].Models[i]
+		}
+	}
+	if newestFlash == nil || newestFlash.HitPeak != 0.2 {
+		t.Fatalf("newest history flash=%+v", newestFlash)
 	}
 }

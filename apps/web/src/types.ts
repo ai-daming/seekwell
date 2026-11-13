@@ -63,6 +63,8 @@ export type Entry = {
   cache_miss_tokens: number | null;
   cost_cny: number | null;
   price_period: 'peak' | 'offpeak' | null;
+  pricing_model: string | null;
+  cost_unknown_reason: 'failed' | 'no_usage' | 'unpriced' | null;
 };
 
 export type SpeedTestResult = {
@@ -155,6 +157,23 @@ export type UsageDaily = AccessUsageTotals & {
   date: string;
 };
 
+export type PricingRate = {
+  model: string;
+  hit_off: number;
+  hit_peak: number;
+  miss_off: number;
+  miss_peak: number;
+  out_off: number;
+  out_peak: number;
+};
+
+export type PricingHistory = {
+  version: string;
+  observed_at: string;
+  source: 'bundled' | 'remote' | string;
+  models: PricingRate[];
+};
+
 export type UsagePricing = {
   currency: string;
   unit: string;
@@ -167,6 +186,8 @@ export type UsagePricing = {
   peak_timezone: string;
   peak_windows: string[];
   holiday_years: number[];
+  models: PricingRate[];
+  history: PricingHistory[];
 };
 
 export type UsageStats = {
