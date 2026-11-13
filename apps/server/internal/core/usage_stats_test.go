@@ -63,18 +63,37 @@ type usageStatsDayBody struct {
 	CostUnknownCount  int64    `json:"cost_unknown_count"`
 }
 
+type usageStatsPricingRateBody struct {
+	Model    string  `json:"model"`
+	HitOff   float64 `json:"hit_off"`
+	HitPeak  float64 `json:"hit_peak"`
+	MissOff  float64 `json:"miss_off"`
+	MissPeak float64 `json:"miss_peak"`
+	OutOff   float64 `json:"out_off"`
+	OutPeak  float64 `json:"out_peak"`
+}
+
+type usageStatsPricingHistoryBody struct {
+	Version    string                      `json:"version"`
+	ObservedAt string                      `json:"observed_at"`
+	Source     string                      `json:"source"`
+	Models     []usageStatsPricingRateBody `json:"models"`
+}
+
 type usageStatsPricingBody struct {
-	Currency     string   `json:"currency"`
-	Unit         string   `json:"unit"`
-	Source       string   `json:"source"`
-	SourceURL    string   `json:"source_url"`
-	LastSyncAt   *string  `json:"last_sync_at"`
-	LastSyncOK   bool     `json:"last_sync_ok"`
-	Stale        bool     `json:"stale"`
-	Warning      string   `json:"warning"`
-	PeakTimezone string   `json:"peak_timezone"`
-	PeakWindows  []string `json:"peak_windows"`
-	HolidayYears []int    `json:"holiday_years"`
+	Currency     string                         `json:"currency"`
+	Unit         string                         `json:"unit"`
+	Source       string                         `json:"source"`
+	SourceURL    string                         `json:"source_url"`
+	LastSyncAt   *string                        `json:"last_sync_at"`
+	LastSyncOK   bool                           `json:"last_sync_ok"`
+	Stale        bool                           `json:"stale"`
+	Warning      string                         `json:"warning"`
+	PeakTimezone string                         `json:"peak_timezone"`
+	PeakWindows  []string                       `json:"peak_windows"`
+	HolidayYears []int                          `json:"holiday_years"`
+	Models       []usageStatsPricingRateBody    `json:"models"`
+	History      []usageStatsPricingHistoryBody `json:"history"`
 }
 
 type usageStatsBody struct {

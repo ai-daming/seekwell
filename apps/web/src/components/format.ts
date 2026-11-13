@@ -15,3 +15,13 @@ export function formatCost(value: number | null | undefined): string {
     maximumFractionDigits: 6,
   });
 }
+
+export function formatUnitPrice(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return copy.usageUnknown;
+  }
+  return `¥${value.toLocaleString('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  })}`;
+}

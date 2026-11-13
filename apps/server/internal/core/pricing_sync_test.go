@@ -145,7 +145,7 @@ func TestPricingSyncSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	if info := reopened.pricingInfo(); info.Source != "remote" || info.LastSyncAt == nil {
+	if info := reopened.pricingInfo(); info.Source != "remote" || info.LastSyncAt == nil || !info.LastSyncOK {
 		t.Fatalf("snapshot not persisted: %+v", info)
 	}
 	if got := reopened.priceAttempt("deepseek", "deepseek-flash", 200, oldStart, usage); got.CostNano == nil || *got.CostNano != 1000*200 {

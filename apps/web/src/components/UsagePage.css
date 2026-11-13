@@ -212,3 +212,34 @@
   background: var(--warning-soft);
   border-color: var(--warning);
 }
+
+.usage-table-note {
+  margin: 0 0 var(--space-3);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.usage-price--changed {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.usage-history-tag {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+@media (max-width: 800px) {
+  .usage-table-note {
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 450px) {
+  .usage-table-note {
+    font-size: var(--text-2xs);
+  }
+}

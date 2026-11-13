@@ -1,7 +1,7 @@
 import { copy } from '../copy';
-import type { UsageDaily, UsageKeyStats, UsagePricing, UsageStats } from '../types';
+import type { PricingRate, UsageDaily, UsageKeyStats, UsagePricing, UsageStats } from '../types';
 import { Icon } from './Icon';
-import { formatCost } from './format';
+import { formatCost, formatUnitPrice } from './format';
 import './Channels.css';
 import './UsagePage.css';
 
@@ -160,6 +160,160 @@ function PricingNotes({ pricing }: { pricing: UsagePricing }) {
   );
 }
 
+const pricingColumns = [
+  { key: 'hit_peak', label: copy.usagePricingHitPeak },
+  { key: 'miss_peak', label: copy.usagePricingMissPeak },
+  { key: 'out_peak', label: copy.usagePricingOutPeak },
+  { key: 'hit_off', label: copy.usagePricingHitOff },
+  { key: 'miss_off', label: copy.usagePricingMissOff },
+  { key: 'out_off', label: copy.usagePricingOutOff },
+] as const;
+
+type PricingValueKey = (typeof pricingColumns)[number]['key'];
+
+function pricingValue(rate: PricingRate, key: PricingValueKey): number {
+  return rate[key];
+}
+
+function CurrentPricing({ pricing, models }: { pricing: UsagePricing; models: PricingRate[] }) {
+  const source =
+    pricing.source === 'bundled'
+      ? copy.usagePricingBundled
+      : `${copy.usagePricingRemote} ${formatTime(pricing.last_sync_at)}`;
+  const warning = pricing.stale || !pricing.last_sync_ok;
+  return (
+    <section className="usage-section">
+      <div className="section-head">
+        <div>
+          <div className="eyebrow">OFFICIAL PRICE</div>
+          <h2>{copy.usagePricingCurrent}</h2>
+        </div>
+      </div>
+      <p className="usage-table-note">
+        {copy.usagePricingUnit} · {source}
+        {warning ? ` · ${copy.usagePricingMayBeStale}` : ''}
+      </p>
+      <p className="usage-table-note">{copy.usagePricingAliasNotice}</p>
+      <p className="usage-table-note">{copy.usagePricingNonOfficialNotice}</p>
+      <div className="table-scroll">
+        <table>
+          <caption className="sr-only">{copy.usagePricingCurrentCaption}</caption>
+          <thead>
+            <tr>
+              <th>{copy.usagePricingModel}</th>
+              {pricingColumns.map((column) => (
+                <th key={column.key}>{column.label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {models.map((rate) => (
+              <tr key={rate.model}>
+                <td>
+                  <span className="mono">{rate.model}</span>
+                </td>
+                {pricingColumns.map((column) => (
+                  <td className="usage-numeric" key={column.key}>
+                    {formatUnitPrice(pricingValue(rate, column.key))}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function PricingHistoryTable({ pricing, history }: { pricing: UsagePricing; history: UsagePricing['history'] }) {
+  return (
+    <section className="usage-section">
+      <div className="section-head">
+        <div>
+          <div className="eyebrow">OBSERVED SNAPSHOTS</div>
+          <h2>{copy.usagePricingHistory}</h2>
+        </div>
+      </div>
+      <p className="usage-table-note">{copy.usagePricingHistoryNotExact}</p>
+      <p className="usage-table-note">{copy.usagePricingHistoryNoBackfill}</p>
+      {history.length === 0 ? (
+        <div className="empty">
+          <div className="empty__icon">
+            <Icon name="empty" />
+          </div>
+          <strong>{copy.usagePricingHistoryEmpty}</strong>
+        </div>
+      ) : (
+        <div className="table-scroll">
+          <table>
+            <caption className="sr-only">{copy.usagePricingHistoryCaption}</caption>
+            <thead>
+              <tr>
+                <th>{copy.usagePricingHistoryObservedAt}</th>
+                <th>{copy.usagePricingHistorySource}</th>
+                <th>{copy.usagePricingModel}</th>
+                {pricingColumns.map((column) => (
+                  <th key={column.key}>{column.label}</th>
+                ))}
+                <th>{copy.usagePricingHistoryChange}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.map((snapshot, index) => {
+                const older = history[index + 1];
+                return snapshot.models.map((rate) => {
+                  const olderRate = older?.models.find((item) => item.model === rate.model);
+                  const baseline = older === undefined;
+                  const added = older !== undefined && olderRate === undefined;
+                  return (
+                    <tr key={`${index}-${snapshot.version}-${snapshot.observed_at}-${rate.model}`}>
+                      <td className="usage-time">
+                        <span title={snapshot.observed_at}>{formatTime(snapshot.observed_at)}</span>
+                      </td>
+                      <td>
+                        {snapshot.source === 'bundled' ? copy.usagePricingBundled : copy.usagePricingRemote}
+                      </td>
+                      <td>
+                        <span className="mono">{rate.model}</span>
+                      </td>
+                      {pricingColumns.map((column) => {
+                        const value = pricingValue(rate, column.key);
+                        const oldValue = olderRate ? pricingValue(olderRate, column.key) : undefined;
+                        const changed = oldValue !== undefined && oldValue !== value;
+                        const label = changed
+                          ? `${formatUnitPrice(oldValue)} → ${formatUnitPrice(value)}`
+                          : undefined;
+                        return (
+                          <td
+                            className={`usage-numeric${changed ? ' usage-price--changed' : ''}`}
+                            key={column.key}
+                            title={label}
+                            aria-label={label}
+                          >
+                            {formatUnitPrice(value)}
+                          </td>
+                        );
+                      })}
+                      <td className="usage-history-tag">
+                        {baseline
+                          ? copy.usagePricingHistoryBaseline
+                          : added
+                            ? copy.usagePricingHistoryNewModel
+                            : '—'}
+                      </td>
+                    </tr>
+                  );
+                });
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function UsagePage({ stats, loading, error, onRetry, onGoToKeys }: UsagePageProps) {
   return (
     <>
@@ -230,6 +384,9 @@ export function UsagePage({ stats, loading, error, onRetry, onGoToKeys }: UsageP
           </div>
 
           <PricingNotes pricing={stats.pricing} />
+
+          <CurrentPricing pricing={stats.pricing} models={stats.pricing.models} />
+          <PricingHistoryTable pricing={stats.pricing} history={stats.pricing.history} />
 
           <section className="usage-section">
             <div className="section-head">
