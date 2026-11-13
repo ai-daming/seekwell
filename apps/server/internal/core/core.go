@@ -45,12 +45,16 @@ type Channel struct {
 	MessagesBaseURL   string `json:"messages_base_url"`
 }
 type Server struct {
-	db           *sql.DB
-	client       *http.Client
-	speedTimeout time.Duration
-	testTimeout  time.Duration
-	mu           sync.Mutex
-	sessions     map[string]sessionBinding
+	db            *sql.DB
+	client        *http.Client
+	speedTimeout  time.Duration
+	testTimeout   time.Duration
+	mu            sync.Mutex
+	sessions      map[string]sessionBinding
+	pricing       *pricingState
+	pricingClient *http.Client
+	pricingURL    string
+	now           func() time.Time
 }
 type sessionBinding struct {
 	channel int64
@@ -100,7 +104,7 @@ func New(path string) (*Server, error) {
 		db.Close()
 		return nil, err
 	}
-	for _, column := range []string{"input_tokens", "output_tokens", "cache_hit_tokens", "cache_miss_tokens"} {
+	for _, column := range []string{"input_tokens", "output_tokens", "cache_hit_tokens", "cache_miss_tokens", "cost_nano_cny"} {
 		var count int
 		if err = db.QueryRow(`SELECT count(*) FROM pragma_table_info('requests') WHERE name=?`, column).Scan(&count); err == nil && count == 0 {
 			_, err = db.Exec(`ALTER TABLE requests ADD COLUMN ` + column + ` INTEGER`)
@@ -110,13 +114,48 @@ func New(path string) (*Server, error) {
 			return nil, err
 		}
 	}
-	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS access_keys (id INTEGER PRIMARY KEY, name TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, prefix TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS access_requests (id INTEGER PRIMARY KEY, key_id INTEGER NOT NULL, created_at TEXT NOT NULL, path TEXT NOT NULL, status INTEGER NOT NULL, duration_ms INTEGER NOT NULL, input_tokens INTEGER, output_tokens INTEGER);`)
+	for _, column := range []string{"price_period", "pricing_model", "pricing_version"} {
+		var count int
+		if err = db.QueryRow(`SELECT count(*) FROM pragma_table_info('requests') WHERE name=?`, column).Scan(&count); err == nil && count == 0 {
+			_, err = db.Exec(`ALTER TABLE requests ADD COLUMN ` + column + ` TEXT`)
+		}
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS access_keys (id INTEGER PRIMARY KEY, name TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, prefix TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS access_requests (id INTEGER PRIMARY KEY, key_id INTEGER NOT NULL, created_at TEXT NOT NULL, path TEXT NOT NULL, status INTEGER NOT NULL, duration_ms INTEGER NOT NULL, input_tokens INTEGER, output_tokens INTEGER); CREATE TABLE IF NOT EXISTS pricing_state (id INTEGER PRIMARY KEY CHECK (id=1), body TEXT NOT NULL, updated_at TEXT NOT NULL);`)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	for _, column := range []string{"cache_hit_tokens", "cache_miss_tokens", "cost_nano_cny"} {
+		var count int
+		if err = db.QueryRow(`SELECT count(*) FROM pragma_table_info('access_requests') WHERE name=?`, column).Scan(&count); err == nil && count == 0 {
+			_, err = db.Exec(`ALTER TABLE access_requests ADD COLUMN ` + column + ` INTEGER`)
+		}
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
+	for _, column := range []string{"model", "channel", "kind", "price_period", "pricing_model", "pricing_version"} {
+		var count int
+		if err = db.QueryRow(`SELECT count(*) FROM pragma_table_info('access_requests') WHERE name=?`, column).Scan(&count); err == nil && count == 0 {
+			_, err = db.Exec(`ALTER TABLE access_requests ADD COLUMN ` + column + ` TEXT`)
+		}
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
+	pricing, err := loadPricingState(db)
 	if err != nil {
 		db.Close()
 		return nil, err
 	}
 	_ = os.Chmod(path, 0600)
-	return &Server{db: db, client: &http.Client{Timeout: 5 * time.Minute}, speedTimeout: 30 * time.Second, testTimeout: 60 * time.Second, sessions: make(map[string]sessionBinding)}, nil
+	return &Server{db: db, client: &http.Client{Timeout: 5 * time.Minute}, speedTimeout: 30 * time.Second, testTimeout: 60 * time.Second, sessions: make(map[string]sessionBinding), pricing: pricing, pricingClient: &http.Client{Timeout: pricingSyncTimeout}, pricingURL: pricingURL, now: time.Now}, nil
 }
 func (s *Server) Close() error { return s.db.Close() }
 func validModel(v string) bool {
@@ -615,7 +654,7 @@ func nullableInt(n sql.NullInt64) any {
 	return nil
 }
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {
-	rows, e := s.db.Query(`SELECT created_at,model,channel,kind,status,duration_ms,input_tokens,output_tokens,cache_hit_tokens,cache_miss_tokens FROM requests ORDER BY id DESC LIMIT 100`)
+	rows, e := s.db.Query(`SELECT created_at,model,channel,kind,status,duration_ms,input_tokens,output_tokens,cache_hit_tokens,cache_miss_tokens,cost_nano_cny,price_period FROM requests ORDER BY id DESC LIMIT 100`)
 	if e != nil {
 		fail(w, 500, "读取记录失败")
 		return
@@ -625,16 +664,23 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var at, model, ch, kind string
 		var status, ms int
-		var input, output, cacheHit, cacheMiss sql.NullInt64
-		if e = rows.Scan(&at, &model, &ch, &kind, &status, &ms, &input, &output, &cacheHit, &cacheMiss); e != nil {
+		var input, output, cacheHit, cacheMiss, costNano sql.NullInt64
+		var period sql.NullString
+		if e = rows.Scan(&at, &model, &ch, &kind, &status, &ms, &input, &output, &cacheHit, &cacheMiss, &costNano, &period); e != nil {
 			fail(w, 500, "读取记录失败")
 			return
 		}
-		out = append(out, map[string]any{"created_at": at, "model": model, "channel": ch, "kind": kind, "status": status, "duration_ms": ms, "input_tokens": nullableInt(input), "output_tokens": nullableInt(output), "cache_hit_tokens": nullableInt(cacheHit), "cache_miss_tokens": nullableInt(cacheMiss)})
+		var cost any
+		var pricePeriod any
+		if costNano.Valid {
+			cost = nanoToCNY(costNano.Int64)
+			pricePeriod = period.String
+		}
+		out = append(out, map[string]any{"created_at": at, "model": model, "channel": ch, "kind": kind, "status": status, "duration_ms": ms, "input_tokens": nullableInt(input), "output_tokens": nullableInt(output), "cache_hit_tokens": nullableInt(cacheHit), "cache_miss_tokens": nullableInt(cacheMiss), "cost_cny": cost, "price_period": pricePeriod})
 	}
 	jsonOut(w, 200, out)
 }
-func (s *Server) record(model, name, kind string, status int, start time.Time, usage *usageTotals) {
+func (s *Server) record(model string, c Channel, status int, start time.Time, usage *usageTotals) {
 	var input, output, cacheHit, cacheMiss any
 	if usage != nil {
 		in, out, hit, miss := usage.normalized()
@@ -651,7 +697,19 @@ func (s *Server) record(model, name, kind string, status int, start time.Time, u
 			cacheMiss = *miss
 		}
 	}
-	_, _ = s.db.Exec(`INSERT INTO requests(created_at,model,channel,kind,status,duration_ms,input_tokens,output_tokens,cache_hit_tokens,cache_miss_tokens) VALUES(?,?,?,?,?,?,?,?,?,?)`, time.Now().UTC().Format(time.RFC3339), model, name, kind, status, time.Since(start).Milliseconds(), input, output, cacheHit, cacheMiss)
+	remoteModel := c.RemoteModel
+	if remoteModel == "" {
+		remoteModel = model
+	}
+	price := s.priceAttempt(c.Kind, remoteModel, status, start, usage)
+	var cost, period, pricingModel, pricingVersion any
+	if price.CostNano != nil {
+		cost = *price.CostNano
+		period = price.Period
+		pricingModel = price.Model
+		pricingVersion = price.Version
+	}
+	_, _ = s.db.Exec(`INSERT INTO requests(created_at,model,channel,kind,status,duration_ms,input_tokens,output_tokens,cache_hit_tokens,cache_miss_tokens,cost_nano_cny,price_period,pricing_model,pricing_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, time.Now().UTC().Format(time.RFC3339), model, c.Name, c.Kind, status, time.Since(start).Milliseconds(), input, output, cacheHit, cacheMiss, cost, period, pricingModel, pricingVersion)
 }
 func requestCapabilities(v any) (tools, images bool) {
 	switch value := v.(type) {
@@ -761,7 +819,7 @@ func (s *Server) proxyModel(w http.ResponseWriter, r *http.Request, path string)
 		req.Header.Set("Content-Type", "application/json")
 		credential, err := s.credential(c)
 		if err != nil {
-			s.record(model, c.Name, c.Kind, 0, start, nil)
+			s.record(model, c, 0, start, nil)
 			continue
 		}
 		req.Header.Set("Authorization", "Bearer "+credential)
@@ -795,17 +853,26 @@ func (s *Server) proxyModel(w http.ResponseWriter, r *http.Request, path string)
 		applyDimOAuthHeaders(req, c)
 		resp, e := s.client.Do(req)
 		if e != nil {
-			s.record(model, c.Name, c.Kind, 0, start, nil)
+			s.record(model, c, 0, start, nil)
 			if r.Context().Err() != nil {
 				return
 			}
 			continue
 		}
 		if resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 429 || resp.StatusCode >= 500 {
-			s.record(model, c.Name, c.Kind, resp.StatusCode, start, nil)
+			s.record(model, c, resp.StatusCode, start, nil)
 			io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 			resp.Body.Close()
 			continue
+		}
+		if tracker, ok := w.(*usageWriter); ok {
+			remoteModel := c.RemoteModel
+			if remoteModel == "" {
+				remoteModel = model
+			}
+			tracker.channelKind = c.Kind
+			tracker.channelModel = remoteModel
+			tracker.channelName = c.Name
 		}
 		w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 		w.Header().Set("X-SeekWell-Channel", c.Name)
@@ -815,7 +882,7 @@ func (s *Server) proxyModel(w http.ResponseWriter, r *http.Request, path string)
 		resp.Body.Close()
 		usage.finish()
 		if copyErr != nil {
-			s.record(model, c.Name, c.Kind, 0, start, &usage.usageTotals)
+			s.record(model, c, 0, start, &usage.usageTotals)
 			panic(http.ErrAbortHandler)
 		}
 		if session != "" && resp.StatusCode >= 200 && resp.StatusCode < 300 {
@@ -832,7 +899,7 @@ func (s *Server) proxyModel(w http.ResponseWriter, r *http.Request, path string)
 			}
 			s.mu.Unlock()
 		}
-		s.record(model, c.Name, c.Kind, resp.StatusCode, start, &usage.usageTotals)
+		s.record(model, c, resp.StatusCode, start, &usage.usageTotals)
 		return
 	}
 	if attempted == 0 {

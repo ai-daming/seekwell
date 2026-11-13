@@ -12,52 +12,76 @@ import (
 )
 
 type usageStatsOverallBody struct {
-	RequestCount      int64   `json:"request_count"`
-	SuccessCount      int64   `json:"success_count"`
-	FailureCount      int64   `json:"failure_count"`
-	UsageKnownCount   int64   `json:"usage_known_count"`
-	UsageUnknownCount int64   `json:"usage_unknown_count"`
-	InputTokens       *int64  `json:"input_tokens"`
-	OutputTokens      *int64  `json:"output_tokens"`
-	TotalTokens       *int64  `json:"total_tokens"`
-	KeyCount          int64   `json:"key_count"`
-	EnabledKeyCount   int64   `json:"enabled_key_count"`
-	LastRequestAt     *string `json:"last_request_at"`
+	RequestCount      int64    `json:"request_count"`
+	SuccessCount      int64    `json:"success_count"`
+	FailureCount      int64    `json:"failure_count"`
+	UsageKnownCount   int64    `json:"usage_known_count"`
+	UsageUnknownCount int64    `json:"usage_unknown_count"`
+	InputTokens       *int64   `json:"input_tokens"`
+	OutputTokens      *int64   `json:"output_tokens"`
+	TotalTokens       *int64   `json:"total_tokens"`
+	CostCNY           *float64 `json:"cost_cny"`
+	CostKnownCount    int64    `json:"cost_known_count"`
+	CostUnknownCount  int64    `json:"cost_unknown_count"`
+	KeyCount          int64    `json:"key_count"`
+	EnabledKeyCount   int64    `json:"enabled_key_count"`
+	LastRequestAt     *string  `json:"last_request_at"`
 }
 
 type usageStatsKeyBody struct {
-	ID                int64   `json:"id"`
-	Name              string  `json:"name"`
-	Prefix            string  `json:"prefix"`
-	Enabled           bool    `json:"enabled"`
-	CreatedAt         string  `json:"created_at"`
-	RequestCount      int64   `json:"request_count"`
-	SuccessCount      int64   `json:"success_count"`
-	FailureCount      int64   `json:"failure_count"`
-	UsageKnownCount   int64   `json:"usage_known_count"`
-	UsageUnknownCount int64   `json:"usage_unknown_count"`
-	InputTokens       *int64  `json:"input_tokens"`
-	OutputTokens      *int64  `json:"output_tokens"`
-	TotalTokens       *int64  `json:"total_tokens"`
-	LastRequestAt     *string `json:"last_request_at"`
+	ID                int64    `json:"id"`
+	Name              string   `json:"name"`
+	Prefix            string   `json:"prefix"`
+	Enabled           bool     `json:"enabled"`
+	CreatedAt         string   `json:"created_at"`
+	RequestCount      int64    `json:"request_count"`
+	SuccessCount      int64    `json:"success_count"`
+	FailureCount      int64    `json:"failure_count"`
+	UsageKnownCount   int64    `json:"usage_known_count"`
+	UsageUnknownCount int64    `json:"usage_unknown_count"`
+	InputTokens       *int64   `json:"input_tokens"`
+	OutputTokens      *int64   `json:"output_tokens"`
+	TotalTokens       *int64   `json:"total_tokens"`
+	CostCNY           *float64 `json:"cost_cny"`
+	CostKnownCount    int64    `json:"cost_known_count"`
+	CostUnknownCount  int64    `json:"cost_unknown_count"`
+	LastRequestAt     *string  `json:"last_request_at"`
 }
 
 type usageStatsDayBody struct {
-	Date              string `json:"date"`
-	RequestCount      int64  `json:"request_count"`
-	SuccessCount      int64  `json:"success_count"`
-	FailureCount      int64  `json:"failure_count"`
-	UsageKnownCount   int64  `json:"usage_known_count"`
-	UsageUnknownCount int64  `json:"usage_unknown_count"`
-	InputTokens       *int64 `json:"input_tokens"`
-	OutputTokens      *int64 `json:"output_tokens"`
-	TotalTokens       *int64 `json:"total_tokens"`
+	Date              string   `json:"date"`
+	RequestCount      int64    `json:"request_count"`
+	SuccessCount      int64    `json:"success_count"`
+	FailureCount      int64    `json:"failure_count"`
+	UsageKnownCount   int64    `json:"usage_known_count"`
+	UsageUnknownCount int64    `json:"usage_unknown_count"`
+	InputTokens       *int64   `json:"input_tokens"`
+	OutputTokens      *int64   `json:"output_tokens"`
+	TotalTokens       *int64   `json:"total_tokens"`
+	CostCNY           *float64 `json:"cost_cny"`
+	CostKnownCount    int64    `json:"cost_known_count"`
+	CostUnknownCount  int64    `json:"cost_unknown_count"`
+}
+
+type usageStatsPricingBody struct {
+	Currency     string   `json:"currency"`
+	Unit         string   `json:"unit"`
+	Source       string   `json:"source"`
+	SourceURL    string   `json:"source_url"`
+	LastSyncAt   *string  `json:"last_sync_at"`
+	LastSyncOK   bool     `json:"last_sync_ok"`
+	Stale        bool     `json:"stale"`
+	Warning      string   `json:"warning"`
+	PeakTimezone string   `json:"peak_timezone"`
+	PeakWindows  []string `json:"peak_windows"`
+	HolidayYears []int    `json:"holiday_years"`
 }
 
 type usageStatsBody struct {
 	Overall usageStatsOverallBody `json:"overall"`
 	Keys    []usageStatsKeyBody   `json:"keys"`
 	Daily   []usageStatsDayBody   `json:"daily"`
+	Pricing usageStatsPricingBody `json:"pricing"`
 }
 
 func newUsageStatsServer(t *testing.T) (*Server, *httptest.Server) {

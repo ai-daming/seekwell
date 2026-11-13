@@ -1,11 +1,13 @@
 package main
 
 import (
-	"github.com/ai-daming/seekwell/apps/server/internal/core"
+	"context"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+
+	"github.com/ai-daming/seekwell/apps/server/internal/core"
 )
 
 func main() {
@@ -18,6 +20,7 @@ func main() {
 		log.Fatal(e)
 	}
 	defer s.Close()
+	s.StartPricingSync(context.Background())
 	web := os.Getenv("SEEKWELL_WEB")
 	if web == "" {
 		web = "../web/dist"

@@ -624,16 +624,18 @@ func TestSpeedTestConnectionFailure(t *testing.T) {
 }
 
 type historyEntry struct {
-	CreatedAt       string `json:"created_at"`
-	Model           string `json:"model"`
-	Channel         string `json:"channel"`
-	Kind            string `json:"kind"`
-	Status          int    `json:"status"`
-	DurationMS      int    `json:"duration_ms"`
-	InputTokens     *int64 `json:"input_tokens"`
-	OutputTokens    *int64 `json:"output_tokens"`
-	CacheHitTokens  *int64 `json:"cache_hit_tokens"`
-	CacheMissTokens *int64 `json:"cache_miss_tokens"`
+	CreatedAt       string   `json:"created_at"`
+	Model           string   `json:"model"`
+	Channel         string   `json:"channel"`
+	Kind            string   `json:"kind"`
+	Status          int      `json:"status"`
+	DurationMS      int      `json:"duration_ms"`
+	InputTokens     *int64   `json:"input_tokens"`
+	OutputTokens    *int64   `json:"output_tokens"`
+	CacheHitTokens  *int64   `json:"cache_hit_tokens"`
+	CacheMissTokens *int64   `json:"cache_miss_tokens"`
+	CostCNY         *float64 `json:"cost_cny"`
+	PricePeriod     *string  `json:"price_period"`
 }
 
 func historyRaw(t *testing.T, h *httptest.Server) []byte {

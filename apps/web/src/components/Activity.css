@@ -38,3 +38,17 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+.activity-cost {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.activity-cost__period {
+  display: block;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}

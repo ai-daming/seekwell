@@ -121,6 +121,17 @@ test('T4 copy 不变量非空且被组件引用', () => {
     'usageUnknown',
     'usageNeverUsed',
     'usageStatsFailed',
+    'usageCost',
+    'usageCostColumn',
+    'usageCostKnown',
+    'usagePeak',
+    'usageOffpeak',
+    'usagePricingEstimate',
+    'usagePricingExclusions',
+    'usagePricingSnapshot',
+    'usagePricingBundled',
+    'usagePricingSyncFailed',
+    'usageHolidayUncovered',
     'themeLabel',
     'themeSystem',
     'themeLight',
@@ -262,8 +273,8 @@ test('T17 调用记录展示渠道类型且未知不猜', () => {
   const activity = read(join(componentsRoot, 'ActivityTable.tsx'));
   assert.match(
     activity,
-    /<th>时间<\/th>\s*<th>统一模型<\/th>\s*<th>渠道<\/th>\s*<th>渠道类型<\/th>\s*<th>状态码<\/th>\s*<th>输入 tokens<\/th>\s*<th>输出 tokens<\/th>\s*<th>缓存命中率<\/th>\s*<th>耗时<\/th>/,
-    '调用记录表头缺少「渠道类型」「Token」或顺序不对',
+    /<th>时间<\/th>\s*<th>统一模型<\/th>\s*<th>渠道<\/th>\s*<th>渠道类型<\/th>\s*<th>状态码<\/th>\s*<th>输入 tokens<\/th>\s*<th>输出 tokens<\/th>\s*<th>缓存命中率<\/th>\s*<th>费用<\/th>\s*<th>耗时<\/th>/,
+    '调用记录表头缺少「渠道类型」「Token」「费用」或顺序不对',
   );
   assert.match(activity, /kindLabel\(entry\.kind\)/, '调用记录未复用 kindLabel');
 
@@ -390,6 +401,62 @@ test('T22 调用记录展示输入/输出 Token 与缓存命中率且未知不�
   assert.match(activity, /input_tokens/, '命中率缺少 input_tokens 回退');
   assert.match(activity, /Number\.isFinite\(/, '命中率未拦截 NaN/Infinity');
   assert.match(activity, /toFixed\(1\)/, '命中率未格式化为一位小数');
+});
+
+test('T23 费用字段、格式化与页面展示', () => {
+  const typeSource = read(join(srcRoot, 'types.ts'));
+  assert.match(
+    typeSource,
+    /export type Entry\s*=\s*\{[\s\S]*?cost_cny:\s*number\s*\|\s*null;[\s\S]*?price_period:\s*'peak'\s*\|\s*'offpeak'\s*\|\s*null;[\s\S]*?\};/,
+    'Entry 缺少可空 cost_cny / price_period',
+  );
+  assert.match(
+    typeSource,
+    /export type AccessUsageTotals\s*=\s*\{[\s\S]*?cost_cny:\s*number\s*\|\s*null;[\s\S]*?cost_known_count:\s*number;[\s\S]*?cost_unknown_count:\s*number;[\s\S]*?\};/,
+    'AccessUsageTotals 缺少费用字段',
+  );
+  assert.match(typeSource, /export type UsagePricing\s*=/, '缺少 UsagePricing 类型');
+  for (const field of ['currency', 'unit', 'source', 'last_sync_at', 'last_sync_ok', 'stale', 'warning', 'peak_windows', 'holiday_years']) {
+    assert.match(typeSource, new RegExp(`export type UsagePricing[\\s\\S]*?${field}`), `UsagePricing 缺少 ${field}`);
+  }
+  assert.match(typeSource, /export type UsageStats\s*=\s*\{[\s\S]*?pricing:\s*UsagePricing;/, 'UsageStats 缺少 pricing');
+
+  const formatPath = join(componentsRoot, 'format.ts');
+  assert.ok(existsSync(formatPath), '缺少统一费用格式化模块');
+  const format = read(formatPath);
+  assert.match(format, /export function formatCost\(value:\s*number\s*\|\s*null/, 'formatCost 签名应接受 number | null');
+  assert.match(format, /copy\.usageUnknown/, 'null 费用未显示「未知」');
+  assert.match(format, /zh-CN/, '金额未使用 zh-CN 本地化');
+  assert.match(format, /¥/, '金额缺少人民币符号');
+  assert.match(format, /maximumFractionDigits:\s*6/, '金额未限制最多 6 位小数');
+  assert.match(format, /minimumFractionDigits:\s*2/, '金额未保证至少 2 位小数');
+  assert.match(format, /< ¥0\.000001/, '极小非零费用缺少兜底文案');
+  assert.match(format, /Number\.isFinite/, '金额未拦截 NaN/Infinity');
+
+  const activity = read(join(componentsRoot, 'ActivityTable.tsx'));
+  assert.match(activity, /formatCost\(/, '调用记录未使用 formatCost');
+  assert.match(activity, /entry\.cost_cny/, '调用记录未读取 cost_cny');
+  assert.match(activity, /entry\.price_period/, '调用记录未读取 price_period');
+  assert.match(activity, /copy\.usagePeak/, '调用记录缺少高峰标识');
+  assert.match(activity, /copy\.usageOffpeak/, '调用记录缺少空闲标识');
+
+  const usage = read(join(componentsRoot, 'UsagePage.tsx'));
+  assert.match(usage, /copy\.usageCost\b/, '使用统计缺少累计花费');
+  assert.match(usage, /copy\.usageCostColumn/, '每个 Key 缺少花费列');
+  assert.match(usage, /copy\.usageCostKnown/, '累计花费缺少已计价覆盖说明');
+  assert.match(usage, /formatCost\(stats\.overall\.cost_cny\)/, '累计花费未使用 formatCost');
+  assert.match(usage, /formatCost\(item\.cost_cny\)/, '每个 Key 花费未使用 formatCost');
+  assert.match(usage, /formatCost\(day\.cost_cny\)/, '近 7 天缺少费用');
+  assert.match(usage, /copy\.usagePricingEstimate/, '缺少估算说明');
+  assert.match(usage, /copy\.usagePricingExclusions/, '缺少 Search/Fetch 与非官方渠道说明');
+  assert.match(usage, /copy\.usagePricingSnapshot/, '缺少价格快照说明');
+  assert.match(usage, /copy\.usagePricingBundled/, '缺少内置价格说明');
+  assert.match(usage, /copy\.usagePricingSyncFailed/, '缺少同步失败提示');
+  assert.match(usage, /pricing\.stale/, '页面未引用 stale');
+  assert.match(usage, /pricing\.last_sync_ok/, '页面未引用 last_sync_ok');
+  assert.match(usage, /pricing\.warning/, '页面未展示 pricing.warning');
+  assert.match(usage, /copy\.usageHolidayUncovered/, '缺少节假日覆盖提示');
+  assert.match(usage, /holiday_years/, '未使用 holiday_years 判断覆盖');
 });
 
 const themeTokens = [

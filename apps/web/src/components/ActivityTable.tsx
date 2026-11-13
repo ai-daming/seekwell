@@ -1,6 +1,7 @@
 import { copy } from '../copy';
 import { kindLabel, type Entry } from '../types';
 import { Icon } from './Icon';
+import { formatCost } from './format';
 import './Activity.css';
 import './Channels.css';
 
@@ -39,6 +40,12 @@ function rateText(entry: Entry): string {
   return rate === null ? copy.usageUnknown : `${rate.toFixed(1)}%`;
 }
 
+function periodText(entry: Entry): string | null {
+  if (entry.price_period === 'peak') return copy.usagePeak;
+  if (entry.price_period === 'offpeak') return copy.usageOffpeak;
+  return null;
+}
+
 export function ActivityTable({ entries }: { entries: Entry[] }) {
   if (entries.length === 0) {
     return (
@@ -66,6 +73,7 @@ export function ActivityTable({ entries }: { entries: Entry[] }) {
             <th>输入 tokens</th>
             <th>输出 tokens</th>
             <th>缓存命中率</th>
+            <th>费用</th>
             <th>耗时</th>
           </tr>
         </thead>
@@ -100,6 +108,14 @@ export function ActivityTable({ entries }: { entries: Entry[] }) {
                 </td>
                 <td>
                   <span className="activity-token">{rateText(entry)}</span>
+                </td>
+                <td>
+                  <span className="activity-cost">
+                    {formatCost(entry.cost_cny)}
+                    {entry.cost_cny !== null && periodText(entry) && (
+                      <small className="activity-cost__period">{periodText(entry)}</small>
+                    )}
+                  </span>
                 </td>
                 <td>
                   <span className="activity-duration">{entry.duration_ms ?? 0} ms</span>
