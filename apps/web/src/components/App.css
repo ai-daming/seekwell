@@ -202,9 +202,9 @@
   display: inline-flex;
   flex: none;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-1);
   min-height: 32px;
-  padding: 0 var(--space-2);
+  padding: 0 var(--space-1);
   color: var(--text-secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -216,22 +216,36 @@
 }
 
 .theme-control__label {
+  padding: 0 var(--space-1);
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: var(--text-3xs);
   letter-spacing: 0.06em;
 }
 
-.theme-control__select {
-  min-height: 30px;
+.theme-control__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
   padding: 0;
-  color: var(--text-secondary);
+  color: var(--text-muted);
   background: transparent;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  font-size: var(--text-sm);
-  font-weight: 500;
   cursor: pointer;
+}
+
+.theme-control__button:hover {
+  color: var(--text);
+  background: var(--surface-soft);
+}
+
+.theme-control__button[aria-pressed="true"] {
+  color: var(--text);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
 }
 
 .live-dot {
@@ -607,12 +621,13 @@
     padding: 0 var(--space-1);
   }
 
-  .theme-control__select {
-    max-width: 5.5em;
+  .theme-control__button {
+    width: 26px;
+    height: 26px;
   }
 
   .topbar .breadcrumb {
-    max-width: 48vw;
+    max-width: 42vw;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

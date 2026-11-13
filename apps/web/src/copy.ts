@@ -19,6 +19,9 @@ export const icons = {
   stats: '📈',
   speed: '⚡',
   test: '🧪',
+  themeSystem: '🖥️',
+  themeLight: '☀️',
+  themeDark: '🌙',
 } as const;
 
 export const copy = {
