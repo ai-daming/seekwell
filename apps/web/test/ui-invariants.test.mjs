@@ -92,6 +92,7 @@ test('T3 管理界面接口集合', () => {
     '/api/keys/${id}',
     '/api/requests',
     '/api/tools/search',
+    '/api/usage/stats',
   ].sort());
 });
 
@@ -115,6 +116,11 @@ test('T4 copy 不变量非空且被组件引用', () => {
     'speedTestNotice',
     'authModeCli',
     'dimAuthHint',
+    'usageScopeNotice',
+    'usageStatsEmptyKeys',
+    'usageUnknown',
+    'usageNeverUsed',
+    'usageStatsFailed',
   ];
   for (const name of required) {
     const match = copySource.match(new RegExp(`\\b${name}\\s*:\\s*(['"\`])([^'"\`]+)\\1`));
@@ -314,4 +320,43 @@ test('T20 渠道用量/额度接口与展示分支', () => {
   assert.match(channels, /copy\.usageUnlimited/, 'DimAgent 无限额度未引用 copy');
   assert.match(channels, /toLocaleString\(\s*['"]zh-CN['"]\s*\)/, '用量日期未使用中文区域格式化');
   assert.match(channels, /slice\(0,\s*\d+\)/, '错误原因未截断');
+});
+
+test('T21 使用统计页面与接口', () => {
+  const typeSource = read(join(srcRoot, 'types.ts'));
+  const shell = read(join(componentsRoot, 'Shell.tsx'));
+  const app = read(join(componentsRoot, 'App.tsx'));
+  const usage = read(join(componentsRoot, 'UsagePage.tsx'));
+  const usageCopy = read(join(srcRoot, 'copy.ts'));
+  assert.match(typeSource, /export type Tab\s*=[^;]*'usage'/, 'Tab 缺少 usage');
+  assert.match(typeSource, /export type UsageStats\s*=/, '缺少 UsageStats 类型');
+  assert.match(typeSource, /export type UsageOverall\s*=/, '缺少 UsageOverall 类型');
+  assert.match(apiSource, /usageStats:\s*\(\)[\s\S]*?\/api\/usage\/stats/, '缺少使用统计 API 客户端');
+  assert.match(shell, /id:\s*'usage'[\s\S]{0,100}?label:\s*'使用统计'/, '侧栏缺少使用统计入口');
+  assert.match(app, /UsagePage/, 'App 未渲染使用统计页面');
+  assert.match(app, /api\.usageStats\(\)/, 'App 未请求使用统计');
+  assert.match(app, /function refreshStats\(/, 'App 缺少独立统计刷新函数');
+  assert.match(app, /statsError/, '使用统计缺少独立错误状态');
+  assert.match(usage, /copy\.usageTotalRequests/, '缺少累计请求指标');
+  assert.match(usageCopy, /usageTotalRequests:\s*'累计请求'/, '累计请求文案缺失');
+  assert.match(usage, /copy\.usageSuccessRate/, '缺少成功率指标');
+  assert.match(usageCopy, /usageSuccessRate:\s*'成功率'/, '成功率文案缺失');
+  assert.match(usage, /copy\.usageTotalTokens/, '缺少累计 Token 指标');
+  assert.match(usageCopy, /usageTotalTokens:\s*'累计 Token'/, '累计 Token 文案缺失');
+  assert.match(usage, /copy\.usageUsageKnown/, '缺少用量已返回指标');
+  assert.match(usage, /copy\.usageActiveKeys/, '缺少访问 Key 指标');
+  assert.match(usage, /copy\.usageRecentSevenDays/, '缺少近 7 天视图');
+  assert.match(usageCopy, /usageRecentSevenDays:\s*'近 7 天使用'/, '近 7 天文案缺失');
+  assert.match(usage, /copy\.usagePerKey/, '缺少每个 Key 的统计');
+  assert.match(usageCopy, /usagePerKey:\s*'每个 Key 的统计'/, '每个 Key 文案缺失');
+  assert.match(usage, /copy\.usageUnknown/, 'null Token 未显示未知');
+  assert.match(usage, /copy\.usageNeverUsed/, 'null 最近调用未显示从未使用');
+  assert.match(usageCopy, /usageNeverUsed:\s*'从未使用'/, '从未使用文案缺失');
+  assert.match(usage, /copy\.usageStatsEmptyKeys/, '缺少无 Key 空态');
+  assert.match(usageCopy, /usageStatsEmptyKeys:\s*'还没有访问 Key'/, '无 Key 空态文案缺失');
+  assert.match(usage, /copy\.usageStatsFailed/, '缺少统计错误提示');
+  assert.match(usage, /onGoToKeys/, '无 Key 空态缺少跳转操作');
+  assert.match(usage, /<caption[\s\S]*?<\/caption>/, '统计表缺少 caption');
+  assert.match(usage, /toLocaleString\(\s*['"]zh-CN['"]\s*\)/, '统计数字/时间未本地化');
+  assert.match(usage, /total_tokens/, '页面未展示合计 Token');
 });

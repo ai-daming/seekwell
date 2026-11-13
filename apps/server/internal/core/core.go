@@ -277,6 +277,7 @@ func (s *Server) Handler(webDir string) http.Handler {
 	m.HandleFunc("GET /api/keys", s.listKeys)
 	m.HandleFunc("POST /api/keys", s.createKey)
 	m.HandleFunc("PATCH /api/keys/{id}", s.updateKey)
+	m.HandleFunc("GET /api/usage/stats", s.usageStats)
 	m.HandleFunc("POST /api/tools/search", func(w http.ResponseWriter, r *http.Request) { s.proxyTool(w, r, "/tools/search") })
 	m.HandleFunc("POST /api/channels/{id}/discover", s.discover)
 	m.HandleFunc("POST /api/channels/{id}/speedtest", s.speedtest)

@@ -5,7 +5,7 @@ import '../base.css';
 import './App.css';
 import { api, request } from '../api';
 import { copy } from '../copy';
-import { freshDraft, type Channel, type ChannelUsage, type Draft, type Entry, type AccessKey, type ModelTestProtocol, type ModelTestResult, type SpeedTestResult, type Tab } from '../types';
+import { freshDraft, type Channel, type ChannelUsage, type Draft, type Entry, type AccessKey, type ModelTestProtocol, type ModelTestResult, type SpeedTestResult, type Tab, type UsageStats } from '../types';
 import { ActivityTable } from './ActivityTable';
 import { ChannelDialog } from './ChannelDialog';
 import { ChannelsTable } from './ChannelsTable';
@@ -16,6 +16,7 @@ import { Overview } from './Overview';
 import { SearchPanel } from './SearchPanel';
 import { Shell } from './Shell';
 import { SpeedDialog } from './SpeedDialog';
+import { UsagePage } from './UsagePage';
 
 export default function App() {
   const [keys, setKeys] = useState<AccessKey[]>([]);
@@ -25,6 +26,9 @@ export default function App() {
   const [usage, setUsage] = useState<Record<number, ChannelUsage>>({});
   const [usageLoading, setUsageLoading] = useState(false);
   const [usageError, setUsageError] = useState('');
+  const [stats, setStats] = useState<UsageStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [statsError, setStatsError] = useState('');
   const [entries, setEntries] = useState<Entry[]>([]);
   const [tab, setTab] = useState<Tab>('overview');
   const [modal, setModal] = useState(false);
@@ -64,6 +68,19 @@ export default function App() {
     }
   }
 
+  async function refreshStats(silent = false) {
+    if (!silent) setStatsLoading(true);
+    try {
+      const data = await api.usageStats();
+      setStats(data);
+      setStatsError('');
+    } catch (caught) {
+      setStatsError(caught instanceof Error ? caught.message : '使用统计加载失败');
+    } finally {
+      if (!silent) setStatsLoading(false);
+    }
+  }
+
   async function refresh(silent = false) {
     if (!silent) setLoading(true);
     try {
@@ -73,6 +90,7 @@ export default function App() {
       setEntries(nextEntries);
       setError('');
       void refreshUsage();
+      void refreshStats(silent);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '连接失败');
     } finally {
@@ -350,6 +368,16 @@ export default function App() {
         )}
 
         {tab === 'keys' && <><div className="page-head"><div><h1>访问 Key</h1><p>每位使用者独立创建，Token 仅统计上游返回的用量。</p></div></div><section><form onSubmit={(e)=>void createKey(e)}><label>使用者或用途 <input required value={keyName} onChange={e=>setKeyName(e.target.value)} /></label> <button className="button button--primary">创建 Key</button></form>{createdKey && <div><p>完整 Key 只显示一次，请立即复制保存：</p><code>{createdKey}</code> <button className="button button--ghost" onClick={()=>void navigator.clipboard.writeText(createdKey)}>复制</button> <button className="button button--ghost" onClick={()=>setCreatedKey('')}>关闭</button></div>}<div className="table-wrap"><table><thead><tr><th>名称</th><th>状态</th><th>请求</th><th>成功 / 失败</th><th>输入 / 输出 Token</th><th>用量已返回</th><th></th></tr></thead><tbody>{keys.map(k=><tr key={k.id}><td>{k.name}<br/>{k.prefix}…</td><td>{k.enabled?'已启用':'已停用'}</td><td>{k.request_count}</td><td>{k.success_count} / {k.failure_count}</td><td>{k.input_tokens ?? '未知'} / {k.output_tokens ?? '未知'}</td><td>{k.usage_known_count} / {k.request_count}</td><td><button className="button button--ghost" onClick={()=>void toggleKey(k)}>{k.enabled?'停用':'启用'}</button></td></tr>)}</tbody></table></div></section></>}
+
+        {tab === 'usage' && (
+          <UsagePage
+            stats={stats}
+            loading={statsLoading}
+            error={statsError}
+            onRetry={() => void refreshStats()}
+            onGoToKeys={() => setTab('keys')}
+          />
+        )}
 
         {tab === 'test' && (
           <>
