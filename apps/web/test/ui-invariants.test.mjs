@@ -84,6 +84,7 @@ test('T3 管理界面接口集合', () => {
   assert.deepEqual([...paths].sort(), [
     '/api/channels',
     '/api/channels/${id}',
+    '/api/channels/usage',
     '/api/channels/${id}/discover',
     '/api/channels/${id}/speedtest',
     '/api/channels/${id}/test',
@@ -287,4 +288,30 @@ test('T19 DimAgent 不提供 API Key 入口', () => {
   assert.match(app, /auth_mode:\s*dimAgent\s*\?\s*'cli_oauth'\s*:\s*'api_key'/, 'changeKind 未按渠道类型设置凭据方式');
   assert.match(app, /channel\.kind === 'dimagent' \? 'cli_oauth' : channel\.auth_mode/, '编辑 DimAgent 未固定 cli_oauth');
   assert.match(app, /channel\.kind === 'dimagent'[\s\S]{0,160}api_key: ''/, '编辑 DimAgent 未清空 API Key');
+});
+
+test('T20 渠道用量/额度接口与展示分支', () => {
+  const typeSource = read(join(srcRoot, 'types.ts'));
+  const channels = read(join(componentsRoot, 'ChannelsTable.tsx'));
+  const app = read(join(componentsRoot, 'App.tsx'));
+  assert.match(apiSource, /channelUsage:\s*\(\)[\s\S]*?\/api\/channels\/usage/, '缺少渠道用量 API 客户端');
+  assert.match(typeSource, /export type ChannelUsage\s*=/, '缺少 ChannelUsage 类型');
+  assert.match(typeSource, /export type UsageWindow\s*=/, '缺少 UsageWindow 类型');
+  assert.match(app, /api\.channelUsage\(\)/, 'App 未单独请求渠道用量');
+  assert.match(app, /function refreshUsage\(/, 'App 缺少独立用量刷新函数');
+  assert.match(channels, /<th>用量 \/ 额度<\/th>/, '渠道表缺少「用量 / 额度」列');
+  assert.match(channels, /copy\.usageLoading/, '缺少查询中分支');
+  assert.match(channels, /copy\.usageUnavailable/, '缺少不可查询分支');
+  assert.match(channels, /copy\.usageUnsupported/, '缺少未接入/不支持分支');
+  assert.match(channels, /status\s*===\s*'unsupported'/, '缺少 unsupported 分支');
+  assert.match(channels, /status\s*===\s*'error'/, '缺少 error 分支');
+  assert.match(channels, /five_hour/, '缺少 OpenCode Go 窗口分支');
+  assert.match(channels, /credits/, '缺少 DimAgent Credits 分支');
+  assert.match(channels, /copy\.usageFiveHour/, 'OpenCode 5 小时窗口未引用 copy');
+  assert.match(channels, /copy\.usageWeekly/, 'OpenCode 每周窗口未引用 copy');
+  assert.match(channels, /copy\.usageMonthly/, 'OpenCode 每月窗口未引用 copy');
+  assert.match(channels, /copy\.usageCredits/, 'DimAgent Credits 未引用 copy');
+  assert.match(channels, /copy\.usageUnlimited/, 'DimAgent 无限额度未引用 copy');
+  assert.match(channels, /toLocaleString\(\s*['"]zh-CN['"]\s*\)/, '用量日期未使用中文区域格式化');
+  assert.match(channels, /slice\(0,\s*\d+\)/, '错误原因未截断');
 });

@@ -1,4 +1,4 @@
-import type { Channel, Draft, Entry, ModelTestInput, ModelTestResult, SpeedTestResult } from './types';
+import type { Channel, ChannelUsage, Draft, Entry, ModelTestInput, ModelTestResult, SpeedTestResult } from './types';
 
 export async function request<T>(path: string, opts?: RequestInit): Promise<T> {
   const response = await fetch(path, opts);
@@ -20,6 +20,7 @@ const jsonHeaders = { 'Content-Type': 'application/json' };
 
 export const api = {
   channels: () => request<Channel[]>('/api/channels'),
+  channelUsage: () => request<{ usage: ChannelUsage[] }>('/api/channels/usage'),
   requests: () => request<Entry[]>('/api/requests'),
   createChannel: (draft: Draft) =>
     request<Channel>('/api/channels', {

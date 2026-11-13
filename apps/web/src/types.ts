@@ -21,6 +21,35 @@ export type Channel = {
   messages_base_url: string;
 };
 
+
+export type UsageWindow = {
+  window?: string;
+  used_percent?: number;
+  resets_at?: string;
+  duration_hours?: number;
+  token_used?: number;
+  token_cap?: number;
+};
+
+export type UsageCredits = {
+  total?: number;
+  used?: number;
+  remaining?: number;
+  unlimited?: boolean;
+  unit?: string;
+  expires_at?: string;
+};
+
+export type ChannelUsage = {
+  channel_id: number;
+  kind: string;
+  status: 'ok' | 'error' | 'unsupported' | string;
+  checked_at?: string;
+  message?: string;
+  credits?: UsageCredits;
+  windows?: UsageWindow[];
+};
+
 export type Entry = {
   created_at: string;
   model: string;

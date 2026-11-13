@@ -148,3 +148,35 @@ tbody tr:hover {
     max-width: 18ch;
   }
 }
+.usage-cell {
+  min-width: 18ch;
+}
+
+.usage-lines {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.usage-line {
+  display: block;
+  max-width: 30ch;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.usage-cell__message {
+  max-width: 34ch;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 450px) {
+  .usage-cell {
+    min-width: 16ch;
+  }
+
+  .usage-line,
+  .usage-cell__message {
+    max-width: 20ch;
+  }
+}
