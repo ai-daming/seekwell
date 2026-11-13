@@ -407,11 +407,15 @@ type quotaTransport struct {
 	usageHits   int
 	usageBody   string
 	usageStatus int
+	onUsage     func()
 }
 
 func (f *quotaTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if r.URL.Path == "/zen/go/v1/usage" {
 		f.usageHits++
+		if f.onUsage != nil {
+			f.onUsage()
+		}
 		status := f.usageStatus
 		if status == 0 {
 			status = http.StatusOK
@@ -906,5 +910,120 @@ func TestQuotaResetTimeParsing(t *testing.T) {
 				t.Fatalf("got %v want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestQuotaRequestProbeNon2xxKeepsState(t *testing.T) {
+	for _, status := range []int{http.StatusBadRequest, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusFound} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			clock := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+			probeStatus := 0
+			a := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if probeStatus == 0 {
+					w.WriteHeader(http.StatusPaymentRequired)
+					return
+				}
+				w.WriteHeader(probeStatus)
+			}))
+			defer a.Close()
+			b := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, `{"from":"b"}`) }))
+			defer b.Close()
+			s, h := newTestServer(t)
+			clockPtr := fixedClock(t, s, clock)
+			ca := saveTestChannel(t, s, Channel{Name: "quota-a", BaseURL: a.URL + "/v1", APIKey: "k", Model: "deepseek-flash", RemoteModel: "deepseek-flash", Enabled: true, Kind: "compatible", Priority: 0})
+			saveTestChannel(t, s, Channel{Name: "backup-b", BaseURL: b.URL + "/v1", APIKey: "k", Model: "deepseek-flash", RemoteModel: "deepseek-flash", Enabled: true, Kind: "deepseek", Priority: 1})
+
+			postQuotaModel(t, h, `{"model":"deepseek-flash","messages":[]}`)
+			state := mustQuotaState(t, s, ca.ID)
+			if state.ProbeMode != quotaProbeRequest {
+				t.Fatalf("unexpected mode: %+v", state)
+			}
+			*clockPtr = clock.Add(10 * time.Minute)
+			probeStatus = status
+			resp, _ := postQuotaModel(t, h, `{"model":"deepseek-flash","messages":[]}`)
+			if resp.StatusCode != status {
+				t.Fatalf("probe response status=%d want %d", resp.StatusCode, status)
+			}
+			state = mustQuotaState(t, s, ca.ID)
+			if state.ProbeMode != quotaProbeRequest || !state.NextProbeAt.Equal(clock.Add(20*time.Minute)) {
+				t.Fatalf("non-2xx probe cleared or changed state: %+v", state)
+			}
+		})
+	}
+}
+
+func TestQuotaAsyncRoutingProbeRecoversUsageChannel(t *testing.T) {
+	clock := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	s, h := newTestServer(t)
+	fixedClock(t, s, clock)
+	c := saveTestChannel(t, s, Channel{Name: "opencode-a", BaseURL: "https://opencode.ai/inference/go/v1", APIKey: "key", Model: "deepseek-flash", RemoteModel: "deepseek-flash", Enabled: true, Kind: "opencode_go"})
+	usageCalled := make(chan struct{}, 1)
+	transport := &quotaTransport{
+		modelStatus: http.StatusPaymentRequired,
+		modelBodies: []string{`{"error":"quota"}`},
+		usageBody:   `{"usage":{"rolling":{"percent":100,"resetsAt":"2030-01-01T01:00:00Z"}}}`,
+		onUsage:     func() { usageCalled <- struct{}{} },
+	}
+	s.client = &http.Client{Transport: transport}
+
+	// Prepare a usage-mode state without relying on the immediate mark probe,
+	// then restore the production async hook for the routing path.
+	async := s.quotaProbeAsync
+	s.quotaProbeAsync = func(int64) {}
+	postQuotaModel(t, h, `{"model":"deepseek-flash","messages":[]}`)
+	state := mustQuotaState(t, s, c.ID)
+	s.quotaProbeAsync = async
+	if err := s.setQuotaStateNextProbe(c.ID, state.Revision, clock.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	transport.usageBody = `{"usage":{"rolling":{"percent":10,"resetsAt":"2030-01-01T01:00:00Z"}}}`
+
+	resp, raw := postQuotaModel(t, h, `{"model":"deepseek-flash","messages":[]}`)
+	if resp.StatusCode != http.StatusServiceUnavailable || errorMessage(t, raw) != "所有匹配渠道均因额度耗尽暂时跳过；请稍后重试" {
+		t.Fatalf("due usage state was not skipped: status=%d body=%q", resp.StatusCode, raw)
+	}
+	select {
+	case <-usageCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("routing did not trigger the production async usage probe")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		_, ok, err := s.quotaState(c.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("async usage probe did not clear recovered state")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestQuotaStaleRevisionCannotClearNewerState(t *testing.T) {
+	clock := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	s, _ := newTestServer(t)
+	fixedClock(t, s, clock)
+	disableQuotaProbe(s)
+	c := saveTestChannel(t, s, Channel{Name: "quota-a", BaseURL: "http://a.invalid/v1", APIKey: "k", Model: "deepseek-flash", RemoteModel: "deepseek-flash", Enabled: true, Kind: "compatible"})
+	if err := s.markQuotaExhausted(c, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	first := mustQuotaState(t, s, c.ID)
+	if err := s.markQuotaExhausted(c, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	second := mustQuotaState(t, s, c.ID)
+	if second.Revision <= first.Revision {
+		t.Fatalf("revision did not advance: %d -> %d", first.Revision, second.Revision)
+	}
+	if err := s.clearQuotaState(c.ID, first.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustQuotaState(t, s, c.ID); got.Revision != second.Revision {
+		t.Fatalf("stale revision cleared newer state: %+v", got)
 	}
 }

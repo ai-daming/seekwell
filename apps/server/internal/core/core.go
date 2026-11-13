@@ -964,7 +964,7 @@ func (s *Server) proxyModel(w http.ResponseWriter, r *http.Request, path string)
 			}
 			continue
 		}
-		if probeAttempt {
+		if probeAttempt && resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			_ = s.clearQuotaState(c.ID, probeRevision)
 		}
 		if tracker, ok := w.(*usageWriter); ok {

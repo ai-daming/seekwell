@@ -153,23 +153,16 @@ func (s *Server) markQuotaExhausted(c Channel, reset time.Time) error {
 
 func (s *Server) claimQuotaProbe(channelID int64, mode string, now time.Time) (int64, bool, error) {
 	now = now.UTC()
-	result, err := s.db.Exec(`UPDATE quota_states SET next_probe_at=?,updated_at=?,revision=revision+1 WHERE channel_id=? AND probe_mode=? AND next_probe_at<=?`,
-		formatQuotaTime(now.Add(s.quotaProbeInterval)), formatQuotaTime(now), channelID, mode, formatQuotaTime(now))
-	if err != nil {
-		return 0, false, err
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return 0, false, err
-	}
-	if affected == 0 {
+	var revision int64
+	err := s.db.QueryRow(`UPDATE quota_states SET next_probe_at=?,updated_at=?,revision=revision+1 WHERE channel_id=? AND probe_mode=? AND next_probe_at<=? RETURNING revision`,
+		formatQuotaTime(now.Add(s.quotaProbeInterval)), formatQuotaTime(now), channelID, mode, formatQuotaTime(now)).Scan(&revision)
+	if err == sql.ErrNoRows {
 		return 0, false, nil
 	}
-	state, ok, err := s.quotaState(channelID)
-	if err != nil || !ok {
+	if err != nil {
 		return 0, false, err
 	}
-	return state.Revision, true, nil
+	return revision, true, nil
 }
 
 func (s *Server) clearQuotaState(channelID, revision int64) error {
