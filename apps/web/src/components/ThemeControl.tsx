@@ -1,5 +1,6 @@
-import { useEffect, useState, type ChangeEvent } from 'react';
+import { useEffect, useState } from 'react';
 import { copy } from '../copy';
+import { Icon } from './Icon';
 
 type ThemeMode = 'system' | 'light' | 'dark';
 type ResolvedTheme = 'light' | 'dark';
@@ -53,18 +54,38 @@ export function ThemeControl() {
     if (mode !== 'system') return;
 
     const query = lightQuery();
-    if (!query) return;
-    const handleChange = () => applyTheme(resolveTheme('system'));
-    if (typeof query.addEventListener === 'function') {
-      query.addEventListener('change', handleChange);
-      return () => query.removeEventListener('change', handleChange);
+    const syncSystemTheme = () => applyTheme(resolveTheme('system'));
+    const handleMediaChange = (event: MediaQueryListEvent) => {
+      applyTheme(event.matches ? 'light' : 'dark');
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') syncSystemTheme();
+    };
+
+    if (query) {
+      if (typeof query.addEventListener === 'function') {
+        query.addEventListener('change', handleMediaChange);
+      } else {
+        query.addListener(handleMediaChange);
+      }
     }
-    query.addListener(handleChange);
-    return () => query.removeListener(handleChange);
+    window.addEventListener('focus', syncSystemTheme);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      if (query) {
+        if (typeof query.removeEventListener === 'function') {
+          query.removeEventListener('change', handleMediaChange);
+        } else {
+          query.removeListener(handleMediaChange);
+        }
+      }
+      window.removeEventListener('focus', syncSystemTheme);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [mode]);
 
-  const handleChange = (event: ChangeEvent<HTMLSelectElement>) => {
-    const next = normalizeMode(event.target.value);
+  const selectMode = (next: ThemeMode) => {
     applyTheme(resolveTheme(next));
     setMode(next);
     try {
@@ -75,20 +96,40 @@ export function ThemeControl() {
   };
 
   return (
-    <label className="theme-control">
+    <div className="theme-control" role="group" aria-label={copy.themeLabel}>
       <span className="theme-control__label" aria-hidden="true">
         {copy.themeLabel}
       </span>
-      <select
-        className="theme-control__select"
-        aria-label={copy.themeLabel}
-        value={mode}
-        onChange={handleChange}
+      <button
+        type="button"
+        className="theme-control__button"
+        aria-label={copy.themeSystem}
+        aria-pressed={mode === 'system'}
+        title={copy.themeSystem}
+        onClick={() => selectMode('system')}
       >
-        <option value="system">{copy.themeSystem}</option>
-        <option value="light">{copy.themeLight}</option>
-        <option value="dark">{copy.themeDark}</option>
-      </select>
-    </label>
+        <Icon name="themeSystem" />
+      </button>
+      <button
+        type="button"
+        className="theme-control__button"
+        aria-label={copy.themeLight}
+        aria-pressed={mode === 'light'}
+        title={copy.themeLight}
+        onClick={() => selectMode('light')}
+      >
+        <Icon name="themeLight" />
+      </button>
+      <button
+        type="button"
+        className="theme-control__button"
+        aria-label={copy.themeDark}
+        aria-pressed={mode === 'dark'}
+        title={copy.themeDark}
+        onClick={() => selectMode('dark')}
+      >
+        <Icon name="themeDark" />
+      </button>
+    </div>
   );
 }

@@ -562,3 +562,64 @@ test('W5 构建产物包含预置脚本与浅色选择器', () => {
   const distCss = walk(distRoot).filter((file) => file.endsWith('.css')).map(read).join('\n');
   assert.match(distCss, /data-theme=["']?light/, '构建产物缺少浅色主题选择器');
 });
+
+test('W6 主题控件为三态图标按钮组', () => {
+  const shell = read(join(componentsRoot, 'Shell.tsx'));
+  const controlPath = join(componentsRoot, 'ThemeControl.tsx');
+  const control = existsSync(controlPath) ? read(controlPath) : '';
+
+  assert.doesNotMatch(control, /<select\b/, '主题控件仍渲染 <select>');
+  assert.doesNotMatch(control, /<option\b/, '主题控件仍渲染 <option>');
+  assert.doesNotMatch(control, /theme-control__select/, '主题控件仍保留下拉框类名');
+  assert.match(control, /role=["']group["']/, '主题控件容器缺少 role="group"');
+  assert.match(control, /aria-label=\{copy\.themeLabel\}/, '主题控件容器缺少分组名称');
+
+  const buttons = control.match(/<button\b/g) ?? [];
+  assert.ok(buttons.length >= 3, `主题控件应渲染三个按钮，实际 ${buttons.length}`);
+  const pressed = control.match(/aria-pressed=/g) ?? [];
+  assert.ok(pressed.length >= 3, `每个主题按钮都应带 aria-pressed，实际 ${pressed.length}`);
+
+  const iconBlock = copySource.match(/export const icons\s*=\s*\{([\s\S]*?)\}\s*(?:as const)?;/);
+  assert.ok(iconBlock, '无法读取 icons 定义');
+  for (const [icon, label] of [
+    ['themeSystem', 'themeSystem'],
+    ['themeLight', 'themeLight'],
+    ['themeDark', 'themeDark'],
+  ]) {
+    assert.match(control, new RegExp(`name=["']${icon}["']`), `主题控件缺少 ${icon} 图标`);
+    assert.match(control, new RegExp(`aria-label=\\{copy\\.${label}\\}`), `${icon} 按钮缺少可访问名称`);
+    assert.match(control, new RegExp(`title=\\{copy\\.${label}\\}`), `${icon} 按钮缺少 tooltip`);
+    assert.match(
+      iconBlock[1],
+      new RegExp(`\\b${icon}\\s*:\\s*['"\`][^'"\`]+['"\`]`),
+      `copy.icons 缺少 ${icon}`,
+    );
+  }
+
+  assert.match(control, /onClick=\{\(\)\s*=>\s*selectMode\(['"]system['"]\)\}/, '系统按钮未走统一 selectMode');
+  assert.match(control, /onClick=\{\(\)\s*=>\s*selectMode\(['"]light['"]\)\}/, '浅色按钮未走统一 selectMode');
+  assert.match(control, /onClick=\{\(\)\s*=>\s*selectMode\(['"]dark['"]\)\}/, '深色按钮未走统一 selectMode');
+
+  const themeIndex = shell.indexOf('<ThemeControl');
+  const refreshIndex = shell.indexOf('onClick={onRefresh}');
+  assert.ok(themeIndex >= 0 && refreshIndex > themeIndex, '主题控件应位于刷新按钮之前');
+});
+
+test('W7 系统跟随与重同步', () => {
+  const control = read(join(componentsRoot, 'ThemeControl.tsx'));
+
+  assert.match(control, /prefers-color-scheme/, '缺少系统配色媒体查询');
+  assert.match(control, /addEventListener\(\s*['"]change['"]/, '缺少系统配色 change 监听');
+  assert.match(control, /removeEventListener\(\s*['"]change['"]/, '缺少系统配色 change 清理');
+  assert.match(control, /(?:event|change|ev)\.matches/, '系统配色变化未使用事件自身的 matches');
+  assert.match(control, /addEventListener\(\s*['"]focus['"]/, '缺少窗口 focus 复核');
+  assert.match(control, /removeEventListener\(\s*['"]focus['"]/, '缺少窗口 focus 清理');
+  assert.match(control, /addEventListener\(\s*['"]visibilitychange['"]/, '缺少标签页可见性复核');
+  assert.match(control, /removeEventListener\(\s*['"]visibilitychange['"]/, '缺少标签页可见性清理');
+  assert.match(control, /if\s*\(mode\s*!==\s*['"]system['"]\)\s*return;/, '显式模式仍会订阅系统变化');
+  assert.match(
+    control,
+    /const selectMode\s*=[\s\S]*?applyTheme\(resolveTheme\(next\)\)/,
+    '切换模式时未重新解析并应用主题（含系统强制重同步）',
+  );
+});
