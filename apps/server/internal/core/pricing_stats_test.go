@@ -150,8 +150,8 @@ func TestUsageStatsPricingInfo(t *testing.T) {
 	if p.SourceURL == "" {
 		t.Fatal("source url missing")
 	}
-	if len(p.Models) != 2 {
-		t.Fatalf("pricing models=%+v want bundled six-rate models", p.Models)
+	if len(p.Models) != 4 {
+		t.Fatalf("pricing models=%+v want bundled DeepSeek and GLM models", p.Models)
 	}
 	var flash *usageStatsPricingRateBody
 	for i := range p.Models {
@@ -192,7 +192,7 @@ func TestUsageStatsPricingModelsAndHistoryAPI(t *testing.T) {
 
 	status, body := fetchUsageStats(t, h)
 	got := decodeUsageStats(t, status, body)
-	if len(got.Pricing.Models) != 2 {
+	if len(got.Pricing.Models) != 4 {
 		t.Fatalf("current models=%+v", got.Pricing.Models)
 	}
 	if len(got.Pricing.History) != 2 {
@@ -202,11 +202,13 @@ func TestUsageStatsPricingModelsAndHistoryAPI(t *testing.T) {
 		t.Fatalf("history not newest-first: %+v", got.Pricing.History)
 	}
 	for _, entry := range got.Pricing.History {
-		if entry.Version == "" || entry.ObservedAt == "" || entry.Source != "remote" || len(entry.Models) != 2 {
+		if entry.Version == "" || entry.ObservedAt == "" || entry.Source != "remote" || len(entry.Models) != 4 {
 			t.Fatalf("history entry incomplete: %+v", entry)
 		}
-		if entry.Models[0].Model > entry.Models[1].Model {
-			t.Fatalf("history models not sorted: %+v", entry.Models)
+		for i := 1; i < len(entry.Models); i++ {
+			if entry.Models[i-1].Model > entry.Models[i].Model {
+				t.Fatalf("history models not sorted: %+v", entry.Models)
+			}
 		}
 	}
 	var newestFlash *usageStatsPricingRateBody

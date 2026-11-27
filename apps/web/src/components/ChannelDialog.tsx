@@ -128,6 +128,9 @@ export function ChannelDialog({
               />
             </label>
           </div>
+          <p>
+            <small>OpenCode Go 可填 <code>deepseek-*</code> 或 <code>glm-*</code>；DeepSeek 官方、DimAgent 与兼容 API 只接受 DeepSeek 模型。</small>
+          </p>
 
           <label className="field">
             优先级

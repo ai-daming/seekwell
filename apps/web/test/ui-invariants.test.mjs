@@ -156,6 +156,14 @@ test('T4 copy 不变量非空且被组件引用', () => {
     'usagePricingHistoryNoBackfill',
     'usagePricingHistoryCaption',
     'usagePricingCurrentCaption',
+    'usagePricingFlat',
+    'usagePricingPeriod',
+    'usagePricingSource',
+    'usagePricingSourceDeepSeek',
+    'usagePricingSourceZhipu',
+    'usagePricingFlatRule',
+    'usagePricingGlmBundled',
+    'usagePricingGlmOnlyOpenCode',
     'usageCostOfficialEquivalent',
     'usageCostAssumedMiss',
     'usageCostFailed',
@@ -436,7 +444,7 @@ test('T23 费用字段、格式化与页面展示', () => {
   const typeSource = read(join(srcRoot, 'types.ts'));
   assert.match(
     typeSource,
-    /export type Entry\s*=\s*\{[\s\S]*?cost_cny:\s*number\s*\|\s*null;[\s\S]*?price_period:\s*'peak'\s*\|\s*'offpeak'\s*\|\s*null;[\s\S]*?\};/,
+    /export type Entry\s*=\s*\{[\s\S]*?cost_cny:\s*number\s*\|\s*null;[\s\S]*?price_period:\s*'peak'\s*\|\s*'offpeak'\s*\|\s*'flat'\s*\|\s*null;[\s\S]*?\};/,
     'Entry 缺少可空 cost_cny / price_period',
   );
   assert.match(
@@ -530,6 +538,37 @@ test('T24 价目与价格历史展示', () => {
   assert.doesNotMatch(usageCopy, /非 DeepSeek 官方渠道、未知模型或缺少缓存拆分时显示未知/, '旧文案仍声称非官方渠道/缺缓存拆分未知');
   assert.match(usageCopy, /缺缓存拆分时按未命中估算|缺缓存拆分，按未命中估/, '新文案缺少缺缓存拆分口径');
   assert.match(usageCopy, /官方价折算/, '新文案缺少官方价折算说明');
+});
+
+test('T25 GLM 价目来源、不分时段与渠道边界', () => {
+  const typeSource = read(join(srcRoot, 'types.ts'));
+  assert.match(
+    typeSource,
+    /export type PricingRate\s*=\s*\{[\s\S]*?source:[\s\S]*?source_url:[\s\S]*?flat_period:\s*boolean;\s*[\s\S]*?hit_off/,
+    'PricingRate 缺少来源、来源 URL 或 flat_period',
+  );
+
+  const usage = read(join(componentsRoot, 'UsagePage.tsx'));
+  assert.match(usage, /rate\.source/, '价目未按模型显示来源');
+  assert.match(usage, /rate\.source_url/, '价目未暴露来源 URL');
+  assert.match(usage, /rate\.flat_period/, '价目未按 flat_period 显示时段');
+  assert.match(usage, /copy\.usagePricingSourceZhipu/, 'GLM 来源未标为智谱官方');
+  assert.match(usage, /copy\.usagePricingFlat/, 'GLM 未显示「不分时段」');
+  assert.match(usage, /copy\.usagePricingGlmOnlyOpenCode/, '缺少 GLM 仅 OpenCode Go 的说明');
+  assert.match(usage, /copy\.usagePricingGlmBundled/, '缺少 GLM 内置快照说明');
+  assert.match(usage, /copy\.usagePricingFlatRule/, '缺少智谱官方 API 不分时段说明');
+  assert.match(usage, /copy\.usagePricingSource/, '价目表缺少来源列');
+  assert.match(usage, /copy\.usagePricingPeriod/, '价目表缺少时段列');
+
+  const activity = read(join(componentsRoot, 'ActivityTable.tsx'));
+  assert.match(activity, /price_period === 'flat'/, '调用记录未识别 flat 时段');
+  assert.match(activity, /copy\.usagePricingFlat/, '调用记录 flat 时段未显示「不分时段」');
+
+  const copySource = read(join(srcRoot, 'copy.ts'));
+  assert.match(copySource, /智谱官方 API 价目不分时段|智谱官方 API 价目不分时段，没有高峰/, '缺少智谱不分时段文案');
+  assert.match(copySource, /发布时内置的智谱官方快照/, '缺少 GLM 内置快照文案');
+  assert.match(copySource, /只能从 OpenCode Go 渠道接入/, '缺少 GLM 渠道边界文案');
+  assert.match(copySource, /zhipuai\/glm-5\.3/, '缺少 GLM 前缀归一说明');
 });
 
 const themeTokens = [

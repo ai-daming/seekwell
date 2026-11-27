@@ -145,6 +145,8 @@ function PricingNotes({ pricing }: { pricing: UsagePricing }) {
       <p>{copy.usagePricingEstimate}</p>
       <p>{copy.usagePricingExclusions}</p>
       <p>{copy.usageCostUnknown}</p>
+      <p>{copy.usagePricingGlmOnlyOpenCode}</p>
+      <p>{copy.usagePricingGlmBundled}</p>
       <p>
         {copy.usagePricingSnapshot}：
         {pricing.source === 'bundled'
@@ -153,6 +155,7 @@ function PricingNotes({ pricing }: { pricing: UsagePricing }) {
         {pricing.stale ? ` · ${copy.usagePricingStale}` : ''}
         {` · ${copy.usagePricingPeakRule}`}
       </p>
+      <p>{copy.usagePricingFlatRule}</p>
       {!pricing.last_sync_ok && <p>{copy.usagePricingSyncFailed}</p>}
       {pricing.warning && <p>{pricing.warning}</p>}
       {!holidayCovered && <p>{copy.usageHolidayUncovered}</p>}
@@ -173,6 +176,14 @@ type PricingValueKey = (typeof pricingColumns)[number]['key'];
 
 function pricingValue(rate: PricingRate, key: PricingValueKey): number {
   return rate[key];
+}
+
+function pricingSourceLabel(rate: PricingRate): string {
+  return rate.source === 'zhipu-official' ? copy.usagePricingSourceZhipu : copy.usagePricingSourceDeepSeek;
+}
+
+function pricingPeriodLabel(rate: PricingRate): string {
+  return rate.flat_period ? copy.usagePricingFlat : `${copy.usagePeak} / ${copy.usageOffpeak}`;
 }
 
 function CurrentPricing({ pricing, models }: { pricing: UsagePricing; models: PricingRate[] }) {
@@ -201,6 +212,8 @@ function CurrentPricing({ pricing, models }: { pricing: UsagePricing; models: Pr
           <thead>
             <tr>
               <th>{copy.usagePricingModel}</th>
+              <th>{copy.usagePricingSource}</th>
+              <th>{copy.usagePricingPeriod}</th>
               {pricingColumns.map((column) => (
                 <th key={column.key}>{column.label}</th>
               ))}
@@ -212,6 +225,10 @@ function CurrentPricing({ pricing, models }: { pricing: UsagePricing; models: Pr
                 <td>
                   <span className="mono">{rate.model}</span>
                 </td>
+                <td>
+                  <span title={rate.source_url}>{pricingSourceLabel(rate)}</span>
+                </td>
+                <td>{pricingPeriodLabel(rate)}</td>
                 {pricingColumns.map((column) => (
                   <td className="usage-numeric" key={column.key}>
                     {formatUnitPrice(pricingValue(rate, column.key))}
@@ -253,6 +270,7 @@ function PricingHistoryTable({ pricing, history }: { pricing: UsagePricing; hist
                 <th>{copy.usagePricingHistoryObservedAt}</th>
                 <th>{copy.usagePricingHistorySource}</th>
                 <th>{copy.usagePricingModel}</th>
+                <th>{copy.usagePricingPeriod}</th>
                 {pricingColumns.map((column) => (
                   <th key={column.key}>{column.label}</th>
                 ))}
@@ -272,11 +290,15 @@ function PricingHistoryTable({ pricing, history }: { pricing: UsagePricing; hist
                         <span title={snapshot.observed_at}>{formatTime(snapshot.observed_at)}</span>
                       </td>
                       <td>
-                        {snapshot.source === 'bundled' ? copy.usagePricingBundled : copy.usagePricingRemote}
+                        <span title={rate.source_url}>{pricingSourceLabel(rate)}</span>
+                        <small className="cell-sub">
+                          {snapshot.source === 'bundled' ? copy.usagePricingBundled : copy.usagePricingRemote}
+                        </small>
                       </td>
                       <td>
                         <span className="mono">{rate.model}</span>
                       </td>
+                      <td>{pricingPeriodLabel(rate)}</td>
                       {pricingColumns.map((column) => {
                         const value = pricingValue(rate, column.key);
                         const oldValue = olderRate ? pricingValue(olderRate, column.key) : undefined;

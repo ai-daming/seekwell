@@ -64,13 +64,16 @@ type usageStatsDayBody struct {
 }
 
 type usageStatsPricingRateBody struct {
-	Model    string  `json:"model"`
-	HitOff   float64 `json:"hit_off"`
-	HitPeak  float64 `json:"hit_peak"`
-	MissOff  float64 `json:"miss_off"`
-	MissPeak float64 `json:"miss_peak"`
-	OutOff   float64 `json:"out_off"`
-	OutPeak  float64 `json:"out_peak"`
+	Model      string  `json:"model"`
+	Source     string  `json:"source"`
+	SourceURL  string  `json:"source_url"`
+	FlatPeriod bool    `json:"flat_period"`
+	HitOff     float64 `json:"hit_off"`
+	HitPeak    float64 `json:"hit_peak"`
+	MissOff    float64 `json:"miss_off"`
+	MissPeak   float64 `json:"miss_peak"`
+	OutOff     float64 `json:"out_off"`
+	OutPeak    float64 `json:"out_peak"`
 }
 
 type usageStatsPricingHistoryBody struct {

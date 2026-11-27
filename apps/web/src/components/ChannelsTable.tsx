@@ -220,7 +220,7 @@ export function ChannelsTable({
           <Icon name="empty" />
         </div>
         <strong>{copy.emptyChannels}</strong>
-        <p>添加 DeepSeek 官方 API，或连接已有的兼容网关。</p>
+        <p>添加 DeepSeek 官方 API、OpenCode Go 的 DeepSeek / GLM 映射，或连接已有的兼容网关。</p>
         <button type="button" className="button button--primary" onClick={onAdd}>
           <Icon name="add" /> 添加渠道
         </button>

@@ -175,6 +175,9 @@ func New(path string) (*Server, error) {
 		db.Close()
 		return nil, err
 	}
+	// Old pricing_state rows only contain DeepSeek. Add the release-time GLM
+	// rates after seeding history so the historical baseline stays as observed.
+	pricing.snapshot.Rates = mergeBundledGLMRates(pricing.snapshot.Rates)
 	_ = os.Chmod(path, 0600)
 	s := &Server{db: db, client: &http.Client{Timeout: 5 * time.Minute}, speedTimeout: 30 * time.Second, testTimeout: 60 * time.Second, sessions: make(map[string]sessionBinding), pricing: pricing, pricingClient: &http.Client{Timeout: pricingSyncTimeout}, pricingURL: pricingURL, quotaProbeInterval: quotaProbeIntervalFromEnv(), now: time.Now}
 	s.quotaProbeAsync = func(id int64) {
@@ -183,8 +186,55 @@ func New(path string) (*Server, error) {
 	return s, nil
 }
 func (s *Server) Close() error { return s.db.Close() }
+func hasModelWhitespace(v string) bool {
+	return strings.ContainsAny(v, " \n\r\t")
+}
+
+func isDeepSeekModel(v string) bool {
+	return strings.Contains(strings.ToLower(v), "deepseek")
+}
+
+func isGLMModel(v string) bool {
+	return strings.Contains(strings.ToLower(v), "glm-")
+}
+
+// validModel accepts every model family the /v1 entry point knows about.
 func validModel(v string) bool {
-	return strings.Contains(strings.ToLower(v), "deepseek") && !strings.ContainsAny(v, " \n\r\t")
+	return (isDeepSeekModel(v) || isGLMModel(v)) && !hasModelWhitespace(v)
+}
+
+// validChannelModel keeps GLM limited to OpenCode Go while preserving the
+// existing DeepSeek-only rule for every other channel kind.
+func validChannelModel(kind, v string) bool {
+	if strings.TrimSpace(v) == "" || hasModelWhitespace(v) {
+		return false
+	}
+	if isDeepSeekModel(v) {
+		return true
+	}
+	return kind == "opencode_go" && isGLMModel(v)
+}
+
+func channelModelError(kind string, values ...string) error {
+	for _, value := range values {
+		if isGLMModel(value) {
+			return errors.New("GLM 模型目前只支持 OpenCode Go 渠道")
+		}
+	}
+	if kind == "opencode_go" {
+		return errors.New("统一模型和上游模型必须是 DeepSeek 或 GLM 模型且不能包含空白")
+	}
+	return errors.New("该渠道类型只支持 DeepSeek 模型，且模型名不能包含空白")
+}
+
+func modelTestError(kind, model string) string {
+	if isGLMModel(model) && kind != "opencode_go" {
+		return "GLM 模型目前只支持 OpenCode Go 渠道"
+	}
+	if kind == "opencode_go" {
+		return "测试模型名必须是 DeepSeek 或 GLM 模型且不能包含空白"
+	}
+	return "该渠道类型只支持 DeepSeek 模型，且测试模型名不能包含空白"
 }
 func (s *Server) SaveChannel(c *Channel) error {
 	c.Name = strings.TrimSpace(c.Name)
@@ -195,14 +245,17 @@ func (s *Server) SaveChannel(c *Channel) error {
 	if e != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return errors.New("请输入有效的 HTTP(S) API 地址")
 	}
-	if c.Name == "" || !validModel(c.Model) || !validModel(c.RemoteModel) {
-		return errors.New("名称及包含 deepseek 的统一模型和上游模型不能为空")
-	}
 	if c.Kind == "" {
 		c.Kind = "compatible"
 	}
 	if c.Kind != "compatible" && c.Kind != "deepseek" && c.Kind != "opencode_go" && c.Kind != "dimagent" {
 		return errors.New("不支持的渠道类型")
+	}
+	if c.Name == "" {
+		return errors.New("名称不能为空")
+	}
+	if !validChannelModel(c.Kind, c.Model) || !validChannelModel(c.Kind, c.RemoteModel) {
+		return channelModelError(c.Kind, c.Model, c.RemoteModel)
 	}
 	if c.Kind == "dimagent" {
 		if c.AuthMode != "" && c.AuthMode != "api_key" && c.AuthMode != "cli_oauth" {
@@ -451,7 +504,7 @@ func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 		}
 		models := []string{}
 		for _, model := range catalog.Data {
-			if validModel(model.ID) {
+			if validChannelModel(c.Kind, model.ID) {
 				models = append(models, model.ID)
 			}
 		}
@@ -556,10 +609,6 @@ func (s *Server) modelTest(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "测试提示词不能超过 32KB")
 		return
 	}
-	if !validModel(input.Model) {
-		fail(w, 400, "测试模型名必须包含 deepseek 且不能包含空白")
-		return
-	}
 	if input.Protocol != "chat" && input.Protocol != "responses" && input.Protocol != "messages" {
 		fail(w, 400, "不支持的测试协议")
 		return
@@ -572,6 +621,10 @@ func (s *Server) modelTest(w http.ResponseWriter, r *http.Request) {
 	for _, c := range channels {
 		if c.ID != id {
 			continue
+		}
+		if !validChannelModel(c.Kind, input.Model) {
+			fail(w, 400, modelTestError(c.Kind, input.Model))
+			return
 		}
 		path := "/chat/completions"
 		baseURL := c.BaseURL
@@ -814,7 +867,7 @@ func (s *Server) proxyModel(w http.ResponseWriter, r *http.Request, path string)
 	}
 	var model string
 	if e = json.Unmarshal(body["model"], &model); e != nil || !validModel(model) {
-		fail(w, 400, "仅支持 DeepSeek 模型")
+		fail(w, 400, "仅支持 DeepSeek 或 GLM 模型")
 		return
 	}
 	var decoded map[string]any

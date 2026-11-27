@@ -11,7 +11,11 @@ const (
 	pricingCurrency = "CNY"
 	pricingUnit     = "1M tokens"
 	pricingURL      = "https://api-docs.deepseek.com/zh-cn/quick_start/pricing.md"
+	zhipuPricingURL = "https://docs.bigmodel.cn/cn/guide/start/pricing.md"
 	peakTimezone    = "Asia/Shanghai"
+
+	pricingSourceDeepSeek = "deepseek-official"
+	pricingSourceZhipu    = "zhipu-official"
 )
 
 // Beijing time has no daylight saving time; use a fixed offset so pricing never
@@ -50,15 +54,20 @@ type pricingState struct {
 	syncing       bool
 }
 
-// PricingRate is one model's official price in CNY per million tokens.
+// PricingRate is one model's official price in CNY per million tokens, with
+// the source of that model's rates. FlatPeriod means the official API has one
+// price for all times, so callers must not display peak/offpeak.
 type PricingRate struct {
-	Model    string  `json:"model"`
-	HitOff   float64 `json:"hit_off"`
-	HitPeak  float64 `json:"hit_peak"`
-	MissOff  float64 `json:"miss_off"`
-	MissPeak float64 `json:"miss_peak"`
-	OutOff   float64 `json:"out_off"`
-	OutPeak  float64 `json:"out_peak"`
+	Model      string  `json:"model"`
+	Source     string  `json:"source"`
+	SourceURL  string  `json:"source_url"`
+	FlatPeriod bool    `json:"flat_period"`
+	HitOff     float64 `json:"hit_off"`
+	HitPeak    float64 `json:"hit_peak"`
+	MissOff    float64 `json:"miss_off"`
+	MissPeak   float64 `json:"miss_peak"`
+	OutOff     float64 `json:"out_off"`
+	OutPeak    float64 `json:"out_peak"`
 }
 
 // PricingHistory is one observed official snapshot. ObservedAt is when this
@@ -110,18 +119,46 @@ func bundledPricingRates() map[string]priceRates {
 			MissOff: 4500, MissPeak: 9000,
 			OutOff: 13500, OutPeak: 27000,
 		},
+		// Zhipu official API rates in CNY per million tokens (2026-11-27).
+		// The official API has no peak/offpeak split, so both periods match.
+		"glm-5.3": {
+			HitOff: 2000, HitPeak: 2000,
+			MissOff: 8000, MissPeak: 8000,
+			OutOff: 28000, OutPeak: 28000,
+		},
+		"glm-5.3-flash": {
+			HitOff: 230, HitPeak: 230,
+			MissOff: 800, MissPeak: 800,
+			OutOff: 2800, OutPeak: 2800,
+		},
 	}
 }
 
 func bundledPricingSnapshot() pricingSnapshot {
 	return pricingSnapshot{
-		Version:   "bundled-2026-11-13",
+		Version:   "bundled-2026-11-27",
 		Currency:  pricingCurrency,
 		Unit:      pricingUnit,
 		Source:    "bundled",
 		SourceURL: pricingURL,
 		Rates:     bundledPricingRates(),
 	}
+}
+
+// mergeBundledGLMRates keeps the release-time Zhipu official rates in the
+// active snapshot. DeepSeek sync replaces the DeepSeek rows only; it must never
+// delete or overwrite GLM pricing.
+func mergeBundledGLMRates(rates map[string]priceRates) map[string]priceRates {
+	merged := make(map[string]priceRates, len(rates)+2)
+	for model, rate := range rates {
+		merged[model] = rate
+	}
+	for model, rate := range bundledPricingRates() {
+		if strings.HasPrefix(model, "glm-") {
+			merged[model] = rate
+		}
+	}
+	return merged
 }
 
 // holidayCalendar is a built-in copy of China's statutory holidays. It is
@@ -184,7 +221,12 @@ func pricingHolidayWarning(at time.Time) string {
 
 func normalizePricingModel(name string) string {
 	normalized := strings.ToLower(strings.TrimSpace(name))
-	return strings.TrimPrefix(normalized, "deepseek/")
+	for _, prefix := range []string{"deepseek/", "zhipuai/", "zhipu/"} {
+		if strings.HasPrefix(normalized, prefix) {
+			return strings.TrimPrefix(normalized, prefix)
+		}
+	}
+	return normalized
 }
 
 func canonicalPricingModel(rates map[string]priceRates, name string) (string, bool) {
@@ -211,6 +253,17 @@ func ratesForMap(rates map[string]priceRates, model string) (priceRates, string,
 		return priceRates{}, "", false
 	}
 	return rates[canonical], canonical, true
+}
+
+func ratesAreFlat(rates priceRates) bool {
+	return rates.HitOff == rates.HitPeak && rates.MissOff == rates.MissPeak && rates.OutOff == rates.OutPeak
+}
+
+func pricingSourceForModel(model string) (string, string, bool) {
+	if strings.HasPrefix(model, "glm-") {
+		return pricingSourceZhipu, zhipuPricingURL, true
+	}
+	return pricingSourceDeepSeek, pricingURL, false
 }
 
 func computeCostNano(rates priceRates, period string, hit, miss, output int64) int64 {
@@ -274,6 +327,9 @@ func (s *Server) priceAttempt(kind, remoteModel string, status int, at time.Time
 		return attemptPrice{Reason: "unpriced"}
 	}
 	period := pricePeriodAt(at)
+	if ratesAreFlat(rates) {
+		period = "flat"
+	}
 	cost := computeCostNano(rates, period, *hit, *miss, *output)
 	return attemptPrice{CostNano: &cost, Period: period, Model: canonical, Version: snapshot.Version}
 }
@@ -291,14 +347,18 @@ func pricingRatesAPI(rates map[string]priceRates) []PricingRate {
 	out := make([]PricingRate, 0, len(names))
 	for _, name := range names {
 		rate := rates[name]
+		source, sourceURL, _ := pricingSourceForModel(name)
 		out = append(out, PricingRate{
-			Model:    name,
-			HitOff:   nanoToYuanPerMillion(rate.HitOff),
-			HitPeak:  nanoToYuanPerMillion(rate.HitPeak),
-			MissOff:  nanoToYuanPerMillion(rate.MissOff),
-			MissPeak: nanoToYuanPerMillion(rate.MissPeak),
-			OutOff:   nanoToYuanPerMillion(rate.OutOff),
-			OutPeak:  nanoToYuanPerMillion(rate.OutPeak),
+			Model:      name,
+			Source:     source,
+			SourceURL:  sourceURL,
+			FlatPeriod: ratesAreFlat(rate),
+			HitOff:     nanoToYuanPerMillion(rate.HitOff),
+			HitPeak:    nanoToYuanPerMillion(rate.HitPeak),
+			MissOff:    nanoToYuanPerMillion(rate.MissOff),
+			MissPeak:   nanoToYuanPerMillion(rate.MissPeak),
+			OutOff:     nanoToYuanPerMillion(rate.OutOff),
+			OutPeak:    nanoToYuanPerMillion(rate.OutPeak),
 		})
 	}
 	return out

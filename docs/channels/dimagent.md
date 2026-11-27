@@ -26,7 +26,7 @@ CLI OAuth 凭据受官方客户端限制：该模式按 CLI 0.5.27 的公开请�
 
 ## 模型映射
 
-DimAgent 的模型目录同时包含 DeepSeek 与非 DeepSeek 模型。SeekWell 目前只接受名称包含 `deepseek` 的模型，因此只应映射 DeepSeek 项。一个渠道对应一条模型映射；需要多个上游模型时，建多条渠道或调整映射：
+DimAgent 的模型目录同时包含 DeepSeek 与非 DeepSeek 模型。SeekWell 对 DimAgent 渠道仍只接受名称包含 `deepseek` 的模型，因此只应映射 DeepSeek 项；目录中的 GLM 会被过滤。GLM 当前只通过 OpenCode Go 渠道接入，不在本渠道开放。一个渠道对应一条模型映射；需要多个上游模型时，建多条渠道或调整映射：
 
 - Flash：统一名 `deepseek-flash` → 上游 `deepseek-v4.1-flash`
 - Pro：统一名 `deepseek-pro` → 上游 `deepseek-v4-pro`
@@ -57,7 +57,7 @@ DimAgent 使用预付 Credits。新渠道默认是付费渠道，且「允许自
 
 DimAgent 没有与 DeepSeek 官方一致的 `/v1/tools/search`、`/v1/tools/fetch` 接口。SeekWell 的 Search / Fetch 仍然只使用渠道类型为「DeepSeek 官方」的渠道；把 DimAgent 配成该类型不会让搜索走它。
 
-非目标：不通过 DimAgent 接收 GLM、Step、MiMo、Gemini 等非 DeepSeek 模型，不在 SeekWell 内发起 DimAgent 账号登录，不做跨协议转换。
+非目标：不通过 DimAgent 接收 GLM、Step、MiMo、Gemini 等非 DeepSeek 模型（GLM 经由 OpenCode Go 渠道接入），不在 SeekWell 内发起 DimAgent 账号登录，不做跨协议转换。
 
 ## 验证记录
 
