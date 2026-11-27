@@ -43,6 +43,7 @@ function rateText(entry: Entry): string {
 function periodText(entry: Entry): string | null {
   if (entry.price_period === 'peak') return copy.usagePeak;
   if (entry.price_period === 'offpeak') return copy.usageOffpeak;
+  if (entry.price_period === 'flat') return copy.usagePricingFlat;
   return null;
 }
 

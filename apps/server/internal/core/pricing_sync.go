@@ -303,6 +303,9 @@ func (s *Server) SyncPricing(ctx context.Context) error {
 	s.pricing.mu.Unlock()
 
 	snapshot, fetchErr := s.fetchPricing(ctx)
+	if fetchErr == nil {
+		snapshot.Rates = mergeBundledGLMRates(snapshot.Rates)
+	}
 
 	s.pricing.mu.Lock()
 	defer s.pricing.mu.Unlock()

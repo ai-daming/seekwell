@@ -32,8 +32,8 @@ func assertUnitRate(t *testing.T, label string, got float64, want float64) {
 func TestPricingHistoryInitialState(t *testing.T) {
 	s, _ := newPricingServer(t)
 	info := s.pricingInfo()
-	if len(info.Models) != 2 {
-		t.Fatalf("models=%+v want two bundled models", info.Models)
+	if len(info.Models) != 4 {
+		t.Fatalf("models=%+v want bundled DeepSeek and GLM models", info.Models)
 	}
 	flash := findPricingRate(info.Models, "deepseek-flash")
 	if flash == nil {
@@ -157,6 +157,8 @@ func TestPricingHistorySeedsExistingRemoteSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot := bundledPricingSnapshot()
+	delete(snapshot.Rates, "glm-5.3")
+	delete(snapshot.Rates, "glm-5.3-flash")
 	snapshot.Source = "remote"
 	snapshot.Version = "remote-20261113T120000Z"
 	synced := time.Date(2026, time.November, 13, 12, 0, 0, 0, time.UTC)
@@ -201,12 +203,12 @@ func TestPricingHistoryCorruptRowIsSkipped(t *testing.T) {
 	if len(info.History) != 0 {
 		t.Fatalf("corrupt history=%+v want skipped", info.History)
 	}
-	if len(info.Models) != 2 {
+	if len(info.Models) != 4 {
 		t.Fatalf("current rates lost: %+v", info.Models)
 	}
 	status, body := fetchUsageStats(t, h)
 	got := decodeUsageStats(t, status, body)
-	if len(got.Pricing.Models) != 2 || len(got.Pricing.History) != 0 {
+	if len(got.Pricing.Models) != 4 || len(got.Pricing.History) != 0 {
 		t.Fatalf("stats pricing after corrupt row: %+v", got.Pricing)
 	}
 }

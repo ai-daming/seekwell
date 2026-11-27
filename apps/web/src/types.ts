@@ -62,7 +62,7 @@ export type Entry = {
   cache_hit_tokens: number | null;
   cache_miss_tokens: number | null;
   cost_cny: number | null;
-  price_period: 'peak' | 'offpeak' | null;
+  price_period: 'peak' | 'offpeak' | 'flat' | null;
   pricing_model: string | null;
   cost_unknown_reason: 'failed' | 'no_usage' | 'unpriced' | null;
 };
@@ -159,6 +159,9 @@ export type UsageDaily = AccessUsageTotals & {
 
 export type PricingRate = {
   model: string;
+  source: 'deepseek-official' | 'zhipu-official' | string;
+  source_url: string;
+  flat_period: boolean;
   hit_off: number;
   hit_peak: number;
   miss_off: number;
